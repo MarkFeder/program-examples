@@ -49,7 +49,9 @@ function getAssociatedTokenAddress(mint: PublicKey, owner: PublicKey): PublicKey
   )[0];
 }
 
-// Read the `amount` field (u64 at offset 64) of an SPL token account.
+// Read the `amount` field (u64 at offset 64) of an SPL token account. Mirrors
+// the `u64le` encoder above: avoids BigInt (tsconfig targets es6) and is exact
+// for amounts below 2^53 — the 150-token mint asserted here is well within range.
 function readTokenAmount(data: Uint8Array): number {
   const buffer = Buffer.from(data);
   return buffer.readUInt32LE(64) + buffer.readUInt32LE(68) * 4294967296; // 2^32
