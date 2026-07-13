@@ -9,13 +9,48 @@ use pinocchio::{
 };
 use pinocchio_log::log;
 use pinocchio_system::instructions::CreateAccount;
-use pinocchio_token::instructions::InitializeMint2;
+use pinocchio_token::{instructions::InitializeMint2, state::Mint};
 
-use crate::instructions::{CreateTokenArgs, MINT_SIZE, TOKEN_METADATA_PROGRAM_ID};
+use crate::instructions::util::{push_borsh_string, read_borsh_string};
+
+/// The Metaplex Token Metadata program ID
+/// (`metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s`).
+const TOKEN_METADATA_PROGRAM_ID: pinocchio::Address =
+    pinocchio::Address::from_str_const("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
 
 /// Discriminator of the Metaplex `CreateMetadataAccountV3` instruction (variant
 /// 33 of the Token Metadata program's instruction enum).
 const CREATE_METADATA_ACCOUNT_V3: u8 = 33;
+
+/// Borsh-encoded arguments for the create-token instruction.
+///
+/// Field order matches the `native` example's `CreateTokenArgs` so the two
+/// options share an identical wire format.
+pub struct CreateTokenArgs<'a> {
+    pub name: &'a [u8],
+    pub symbol: &'a [u8],
+    pub uri: &'a [u8],
+    pub decimals: u8,
+}
+
+impl<'a> CreateTokenArgs<'a> {
+    /// Parses the instruction data: three Borsh strings followed by a `u8`.
+    pub fn parse(data: &'a [u8]) -> Result<Self, ProgramError> {
+        let mut offset = 0;
+        let name = read_borsh_string(data, &mut offset)?;
+        let symbol = read_borsh_string(data, &mut offset)?;
+        let uri = read_borsh_string(data, &mut offset)?;
+        let decimals = *data
+            .get(offset)
+            .ok_or(ProgramError::InvalidInstructionData)?;
+        Ok(Self {
+            name,
+            symbol,
+            uri,
+            decimals,
+        })
+    }
+}
 
 /// Creates a new SPL Token mint and attaches an on-chain Metaplex metadata
 /// account to it (name, symbol, URI).
@@ -46,14 +81,14 @@ pub fn create_token(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     let args = CreateTokenArgs::parse(data)?;
 
     // Fund the mint account with enough lamports to stay rent-exempt.
-    let lamports = Rent::get()?.try_minimum_balance(MINT_SIZE)?;
+    let lamports = Rent::get()?.try_minimum_balance(Mint::LEN)?;
 
     log!("Creating mint account");
     CreateAccount {
         from: payer,
         to: mint_account,
         lamports,
-        space: MINT_SIZE as u64,
+        space: Mint::LEN as u64,
         owner: &pinocchio_token::ID,
     }
     .invoke()?;
@@ -122,10 +157,4 @@ fn build_metadata_data(args: &CreateTokenArgs) -> Vec<u8> {
     data.push(0); // collection_details: None
 
     data
-}
-
-/// Appends a Borsh `string` (4-byte little-endian length prefix + UTF-8 bytes).
-fn push_borsh_string(buffer: &mut Vec<u8>, value: &[u8]) {
-    buffer.extend_from_slice(&(value.len() as u32).to_le_bytes());
-    buffer.extend_from_slice(value);
 }
