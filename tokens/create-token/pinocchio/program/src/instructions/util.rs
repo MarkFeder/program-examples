@@ -21,7 +21,11 @@ pub fn read_borsh_string<'a>(data: &'a [u8], offset: &mut usize) -> Result<&'a [
 /// Writes `bytes` into `buffer` at `*offset`, advancing `offset`. Returns
 /// `InvalidInstructionData` if they don't fit — keeping the program `alloc`-free
 /// (a growable `Vec` pulls in codegen the bankrun test runtime can't execute).
-pub fn write_bytes(buffer: &mut [u8], offset: &mut usize, bytes: &[u8]) -> Result<(), ProgramError> {
+pub fn write_bytes(
+    buffer: &mut [u8],
+    offset: &mut usize,
+    bytes: &[u8],
+) -> Result<(), ProgramError> {
     let end = *offset + bytes.len();
     buffer
         .get_mut(*offset..end)
