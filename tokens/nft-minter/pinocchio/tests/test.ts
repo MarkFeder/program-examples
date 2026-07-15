@@ -54,19 +54,28 @@ function readTokenAmount(data: Uint8Array): bigint {
   return Buffer.from(data).readBigUInt64LE(64);
 }
 
-describe("NFT Minter (Pinocchio)", async () => {
+describe("NFT Minter (Pinocchio)", () => {
   const PROGRAM_ID = PublicKey.unique();
-  const context = await start(
-    [
-      { name: "nft_minter_pinocchio_program", programId: PROGRAM_ID },
-      { name: "token_metadata", programId: TOKEN_METADATA_PROGRAM_ID },
-    ],
-    [],
-  );
-  const client = context.banksClient;
-  const payer = context.payer;
+  let context: Awaited<ReturnType<typeof start>>;
+  let client: (typeof context)["banksClient"];
+  let payer: (typeof context)["payer"];
 
   const mintKeypair = Keypair.generate();
+
+  // A `describe` callback runs synchronously, so the async bankrun setup must
+  // live in a `before` hook — otherwise the `it` blocks register after Mocha
+  // has already collected the suite and nothing runs.
+  before(async () => {
+    context = await start(
+      [
+        { name: "nft_minter_pinocchio_program", programId: PROGRAM_ID },
+        { name: "token_metadata", programId: TOKEN_METADATA_PROGRAM_ID },
+      ],
+      [],
+    );
+    client = context.banksClient;
+    payer = context.payer;
+  });
 
   async function sendInstruction(ix: TransactionInstruction, signers: Keypair[]) {
     const tx = new Transaction();
