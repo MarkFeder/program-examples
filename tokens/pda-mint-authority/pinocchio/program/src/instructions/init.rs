@@ -1,7 +1,7 @@
 use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
+    sysvars::rent::{ACCOUNT_STORAGE_OVERHEAD, DEFAULT_LAMPORTS_PER_BYTE},
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
@@ -39,7 +39,13 @@ pub fn init(program_id: &Address, accounts: &[AccountView], data: &[u8]) -> Prog
         return Err(ProgramError::InvalidSeeds);
     }
 
-    let lamports = Rent::get()?.try_minimum_balance(MintAuthorityPda::ACCOUNT_SPACE)?;
+    // Rent computed with integer math using the network's default parameters
+    // (`DEFAULT_LAMPORTS_PER_BYTE` already folds in the 2-year exemption
+    // threshold). We avoid `Rent::try_minimum_balance`, whose floating-point
+    // exemption-threshold path emits an instruction the bankrun test VM rejects
+    // ("unsupported BPF instruction").
+    let lamports = (ACCOUNT_STORAGE_OVERHEAD + MintAuthorityPda::ACCOUNT_SPACE as u64)
+        * DEFAULT_LAMPORTS_PER_BYTE;
     let bump_bytes = [bump];
     let seeds = [
         Seed::from(MintAuthorityPda::SEED_PREFIX),

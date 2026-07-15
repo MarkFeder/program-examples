@@ -57,19 +57,28 @@ function readTokenAmount(data: Uint8Array): bigint {
   return Buffer.from(data).readBigUInt64LE(64);
 }
 
-describe("PDA Mint Authority (Pinocchio)", async () => {
+describe("PDA Mint Authority (Pinocchio)", () => {
   const PROGRAM_ID = PublicKey.unique();
-  const context = await start(
-    [
-      { name: "pda_mint_authority_pinocchio_program", programId: PROGRAM_ID },
-      { name: "token_metadata", programId: TOKEN_METADATA_PROGRAM_ID },
-    ],
-    [],
-  );
-  const client = context.banksClient;
-  const payer = context.payer;
+  let context: Awaited<ReturnType<typeof start>>;
+  let client: (typeof context)["banksClient"];
+  let payer: (typeof context)["payer"];
 
   const mintKeypair = Keypair.generate();
+
+  // A `describe` callback runs synchronously, so the async bankrun setup must
+  // live in a `before` hook — otherwise the `it` blocks register after Mocha
+  // has already collected the suite and nothing runs.
+  before(async () => {
+    context = await start(
+      [
+        { name: "pda_mint_authority_pinocchio_program", programId: PROGRAM_ID },
+        { name: "token_metadata", programId: TOKEN_METADATA_PROGRAM_ID },
+      ],
+      [],
+    );
+    client = context.banksClient;
+    payer = context.payer;
+  });
   const [mintAuthorityPda, mintAuthorityBump] = getMintAuthorityPda(PROGRAM_ID);
 
   async function sendInstruction(ix: TransactionInstruction, signers: Keypair[]) {
