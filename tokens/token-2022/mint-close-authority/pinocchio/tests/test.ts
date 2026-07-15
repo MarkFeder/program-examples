@@ -32,14 +32,20 @@ const DECIMALS_OFFSET = 44; // in the base mint layout
 const MINT_CLOSE_AUTHORITY_EXTENSION = 3;
 const ACCOUNT_TYPE_MINT = 1;
 
-describe("Token-2022 Mint Close Authority (Pinocchio)", async () => {
+describe("Token-2022 Mint Close Authority (Pinocchio)", () => {
   const PROGRAM_ID = PublicKey.unique();
-  const context = await start(
-    [{ name: "token_2022_mint_close_authority_pinocchio_program", programId: PROGRAM_ID }],
-    [],
-  );
-  const client = context.banksClient;
-  const payer = context.payer;
+  let context: Awaited<ReturnType<typeof start>>;
+  let client: (typeof context)["banksClient"];
+  let payer: (typeof context)["payer"];
+
+  // A `describe` callback runs synchronously, so the async bankrun setup must
+  // live in a `before` hook — otherwise the `it` blocks register after Mocha
+  // has already collected the suite and nothing runs.
+  before(async () => {
+    context = await start([{ name: "token_2022_mint_close_authority_pinocchio_program", programId: PROGRAM_ID }], []);
+    client = context.banksClient;
+    payer = context.payer;
+  });
 
   it("Creates a Token-2022 mint with a close authority", async () => {
     const decimals = 9;
