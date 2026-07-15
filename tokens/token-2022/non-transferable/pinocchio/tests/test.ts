@@ -31,11 +31,20 @@ const DECIMALS_OFFSET = 44; // in the base mint layout
 const NON_TRANSFERABLE_EXTENSION = 9;
 const ACCOUNT_TYPE_MINT = 1;
 
-describe("Token-2022 Non-Transferable (Pinocchio)", async () => {
+describe("Token-2022 Non-Transferable (Pinocchio)", () => {
   const PROGRAM_ID = PublicKey.unique();
-  const context = await start([{ name: "token_2022_non_transferable_pinocchio_program", programId: PROGRAM_ID }], []);
-  const client = context.banksClient;
-  const payer = context.payer;
+  let context: Awaited<ReturnType<typeof start>>;
+  let client: (typeof context)["banksClient"];
+  let payer: (typeof context)["payer"];
+
+  // A `describe` callback runs synchronously, so the async bankrun setup must
+  // live in a `before` hook — otherwise the `it` blocks register after Mocha
+  // has already collected the suite and nothing runs.
+  before(async () => {
+    context = await start([{ name: "token_2022_non_transferable_pinocchio_program", programId: PROGRAM_ID }], []);
+    client = context.banksClient;
+    payer = context.payer;
+  });
 
   it("Creates a Token-2022 non-transferable mint", async () => {
     const decimals = 9;
