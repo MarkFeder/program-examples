@@ -1,32 +1,23 @@
 import { Buffer } from "node:buffer";
+import * as path from "node:path";
 import {
   AccountRole,
   address,
   appendTransactionMessageInstruction,
-  blockhash,
-  createKeyPairSignerFromBytes,
   createTransactionMessage,
   generateKeyPairSigner,
   getAddressEncoder,
-  getTransactionEncoder,
+  lamports,
   pipe,
   setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners,
 } from "@solana/kit";
-// solana-bankrun@0.3.1's BanksClient API is still expressed in @solana/web3.js
-// types: `start()` and `getAccount()` take a `PublicKey`, and
-// `processTransaction()` takes a `VersionedTransaction`. Those three are the
-// only web3.js touch-points — a thin interop shim around bankrun. Everything
-// the test *builds* (addresses, the instruction, the transaction message, and
-// signing) uses @solana/kit.
-import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import * as borsh from "borsh";
 import { assert } from "chai";
-import { start } from "solana-bankrun";
+import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 
-// The Token-2022 program is bundled with bankrun, so there is no fixture to
-// load. Its ID is hard-coded here to avoid pulling in @solana/spl-token.
+// LiteSVM's standard runtime bundles the SPL programs, so Token-2022 is already
+// loaded — its ID is hard-coded here to avoid pulling in @solana/spl-token.
 const TOKEN_2022_PROGRAM_ID = address("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const SYSTEM_PROGRAM_ID = address("11111111111111111111111111111111");
 const RENT_SYSVAR_ID = address("SysvarRent111111111111111111111111111111111");
@@ -48,32 +39,34 @@ const DECIMALS_OFFSET = 44; // in the base mint layout
 const MINT_CLOSE_AUTHORITY_EXTENSION = 3;
 const ACCOUNT_TYPE_MINT = 1;
 
+// The compiled program artifact, produced by `build-and-test` into ./fixtures.
+// The npm scripts always run from the package root, so resolve from the cwd.
+const PROGRAM_SO = path.join(
+  process.cwd(),
+  "tests",
+  "fixtures",
+  "token_2022_mint_close_authority_pinocchio_program.so",
+);
+
 const addressEncoder = getAddressEncoder();
 
 describe("Token-2022 Mint Close Authority (Pinocchio)", () => {
-  // bankrun's start() wants a web3.js PublicKey for the program id; convert it
-  // to a kit address for the instruction.
-  const programPubkey = PublicKey.unique();
-  const PROGRAM_ID = address(programPubkey.toBase58());
+  let svm: LiteSVM;
+  let programId: ReturnType<typeof address>;
 
-  let context: Awaited<ReturnType<typeof start>>;
-  let client: (typeof context)["banksClient"];
-
-  // A `describe` callback runs synchronously, so the async bankrun setup must
-  // live in a `before` hook — otherwise the `it` blocks register after Mocha
-  // has already collected the suite and nothing runs.
   before(async () => {
-    context = await start(
-      [{ name: "token_2022_mint_close_authority_pinocchio_program", programId: programPubkey }],
-      [],
-    );
-    client = context.banksClient;
+    svm = new LiteSVM();
+    // The program never asserts its own id, so any address works; a generated
+    // one keeps the test self-contained.
+    programId = (await generateKeyPairSigner()).address;
+    svm.addProgramFromFile(programId, PROGRAM_SO);
   });
 
   it("Creates a Token-2022 mint with a close authority", async () => {
     const decimals = 9;
-    // bankrun funds a web3.js Keypair; re-key it as a kit signer so kit can sign.
-    const payer = await createKeyPairSignerFromBytes(context.payer.secretKey);
+    const payer = await generateKeyPairSigner();
+    svm.airdrop(payer.address, lamports(1_000_000_000n));
+
     const mint = await generateKeyPairSigner();
     // A distinct key for the close authority so the stored-authority assertion
     // verifies it is sourced from account index 2, not the mint authority/payer.
@@ -82,7 +75,7 @@ describe("Token-2022 Mint Close Authority (Pinocchio)", () => {
     const data = Buffer.from(borsh.serialize(CreateTokenArgsSchema, { token_decimals: decimals }));
 
     const ix = {
-      programAddress: PROGRAM_ID,
+      programAddress: programId,
       accounts: [
         { address: mint.address, role: AccountRole.WRITABLE_SIGNER, signer: mint }, // mint account
         { address: payer.address, role: AccountRole.READONLY }, // mint authority
@@ -98,27 +91,22 @@ describe("Token-2022 Mint Close Authority (Pinocchio)", () => {
     const transactionMessage = pipe(
       createTransactionMessage({ version: 0 }),
       (m) => setTransactionMessageFeePayerSigner(payer, m),
-      (m) =>
-        setTransactionMessageLifetimeUsingBlockhash(
-          { blockhash: blockhash(context.lastBlockhash), lastValidBlockHeight: 0n },
-          m,
-        ),
+      (m) => svm.setTransactionMessageLifetimeUsingLatestBlockhash(m),
       (m) => appendTransactionMessageInstruction(ix, m),
     );
 
     const signedTx = await signTransactionMessageWithSigners(transactionMessage);
-    const wireBytes = new Uint8Array(getTransactionEncoder().encode(signedTx));
-    await client.processTransaction(VersionedTransaction.deserialize(wireBytes));
+    const result = svm.sendTransaction(signedTx);
+    if (result instanceof FailedTransactionMetadata) {
+      throw new Error(`Transaction failed: ${result.err()}`);
+    }
 
-    const mintAccount = await client.getAccount(new PublicKey(mint.address));
-    if (mintAccount === null) throw new Error("Mint account not found");
+    const mintAccount = svm.getAccount(mint.address);
+    if (!mintAccount?.exists) throw new Error("Mint account not found");
     const mintData = Buffer.from(mintAccount.data);
 
     // Owned by Token-2022, and sized for exactly one extension.
-    assert.deepEqual(
-      new Uint8Array(mintAccount.owner.toBytes()),
-      new Uint8Array(addressEncoder.encode(TOKEN_2022_PROGRAM_ID)),
-    );
+    assert.equal(mintAccount.programAddress, TOKEN_2022_PROGRAM_ID);
     assert.equal(mintData.length, EXTENDED_MINT_SIZE);
 
     // Base mint fields were initialized.
