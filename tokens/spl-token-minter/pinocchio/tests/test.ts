@@ -1,15 +1,29 @@
 import { Buffer } from "node:buffer";
-import { Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
+import * as path from "node:path";
+import {
+  AccountRole,
+  address,
+  appendTransactionMessageInstruction,
+  createTransactionMessage,
+  generateKeyPairSigner,
+  getAddressEncoder,
+  getProgramDerivedAddress,
+  lamports,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  signTransactionMessageWithSigners,
+} from "@solana/kit";
 import * as borsh from "borsh";
 import { assert } from "chai";
-import { start } from "solana-bankrun";
+import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 
 // The legacy SPL Token and Associated Token Account programs are bundled with
-// bankrun. The Metaplex Token Metadata program is not, so it is dumped from
-// mainnet into tests/fixtures by prepare.mjs and loaded by name below.
-const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
-const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+// LiteSVM's standard runtime. The Metaplex Token Metadata program is not, so it
+// is dumped from mainnet into tests/fixtures by prepare.mjs and loaded below.
+const TOKEN_PROGRAM_ID = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const ASSOCIATED_TOKEN_PROGRAM_ID = address("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+const TOKEN_METADATA_PROGRAM_ID = address("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
+const SYSTEM_PROGRAM_ID = address("11111111111111111111111111111111");
 
 // Instruction discriminators (the Borsh enum variant index).
 const CREATE = 0;
@@ -26,71 +40,65 @@ const CreateTokenArgsSchema: borsh.Schema = {
   },
 };
 
-// Encode a u64 as 8 little-endian bytes without relying on BigInt (tsconfig
-// targets es6). Safe for amounts below 2^53.
-function u64le(value: number): Buffer {
-  const buffer = Buffer.alloc(8);
-  buffer.writeUInt32LE(value >>> 0, 0);
-  buffer.writeUInt32LE(Math.floor(value / 4294967296), 4); // 4294967296 = 2^32
-  return buffer;
-}
+// Borsh schema for the Mint instruction data: discriminator + u64 amount.
+const MintArgsSchema: borsh.Schema = {
+  struct: { instruction: "u8", quantity: "u64" },
+};
 
-function getMetadataAddress(mint: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("metadata"), TOKEN_METADATA_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    TOKEN_METADATA_PROGRAM_ID,
-  )[0];
-}
+// The SPL token account `amount` is a u64 LE at offset 64.
+const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 
-function getAssociatedTokenAddress(mint: PublicKey, owner: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  )[0];
-}
+// The compiled program artifacts live in ./fixtures: the pinocchio program is
+// built there by `build-and-test`, and token_metadata.so is dumped from mainnet
+// by prepare.mjs. The npm scripts always run from the package root.
+const FIXTURES = path.join(process.cwd(), "tests", "fixtures");
+const PROGRAM_SO = path.join(FIXTURES, "spl_token_minter_pinocchio_program.so");
+const TOKEN_METADATA_SO = path.join(FIXTURES, "token_metadata.so");
 
-// Read the `amount` field (u64 at offset 64) of an SPL token account. Mirrors
-// the `u64le` encoder above: avoids BigInt (tsconfig targets es6) and is exact
-// for amounts below 2^53 — the 150-token mint asserted here is well within range.
-function readTokenAmount(data: Uint8Array): number {
-  const buffer = Buffer.from(data);
-  return buffer.readUInt32LE(64) + buffer.readUInt32LE(68) * 4294967296; // 2^32
-}
+const addressEncoder = getAddressEncoder();
 
 describe("SPL Token Minter (Pinocchio)", () => {
-  const PROGRAM_ID = PublicKey.unique();
-  let context: Awaited<ReturnType<typeof start>>;
-  let client: (typeof context)["banksClient"];
-  let payer: (typeof context)["payer"];
+  let svm: LiteSVM;
+  let programId: ReturnType<typeof address>;
+  let payer: Awaited<ReturnType<typeof generateKeyPairSigner>>;
+  let mint: Awaited<ReturnType<typeof generateKeyPairSigner>>;
 
-  const mintKeypair = Keypair.generate();
-
-  // A `describe` callback runs synchronously, so the async bankrun setup must
-  // live in a `before` hook — otherwise the `it` blocks register after Mocha
-  // has already collected the suite and nothing runs.
   before(async () => {
-    context = await start(
-      [
-        { name: "spl_token_minter_pinocchio_program", programId: PROGRAM_ID },
-        { name: "token_metadata", programId: TOKEN_METADATA_PROGRAM_ID },
-      ],
-      [],
-    );
-    client = context.banksClient;
-    payer = context.payer;
+    svm = new LiteSVM();
+    // The program never asserts its own id, so any address works; a generated
+    // one keeps the test self-contained.
+    programId = (await generateKeyPairSigner()).address;
+    svm.addProgramFromFile(programId, PROGRAM_SO);
+    svm.addProgramFromFile(TOKEN_METADATA_PROGRAM_ID, TOKEN_METADATA_SO);
+
+    payer = await generateKeyPairSigner();
+    svm.airdrop(payer.address, lamports(10_000_000_000n));
+    // The mint is created in the first test and reused (as a non-signer) by the
+    // second, so it is generated once for the whole suite.
+    mint = await generateKeyPairSigner();
   });
 
-  async function sendInstruction(ix: TransactionInstruction, signers: Keypair[]) {
-    const tx = new Transaction();
-    tx.feePayer = payer.publicKey;
-    tx.recentBlockhash = context.lastBlockhash;
-    tx.add(ix);
-    tx.sign(...signers);
-    await client.processTransaction(tx);
+  async function send<TInstruction extends Parameters<typeof appendTransactionMessageInstruction>[0]>(
+    ix: TInstruction,
+  ) {
+    const transactionMessage = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(payer, m),
+      (m) => svm.setTransactionMessageLifetimeUsingLatestBlockhash(m),
+      (m) => appendTransactionMessageInstruction(ix, m),
+    );
+    const signedTx = await signTransactionMessageWithSigners(transactionMessage);
+    const result = svm.sendTransaction(signedTx);
+    if (result instanceof FailedTransactionMetadata) {
+      throw new Error(`Transaction failed: ${result.err()}`);
+    }
   }
 
   it("Create an SPL Token!", async () => {
-    const metadataAddress = getMetadataAddress(mintKeypair.publicKey);
+    const [metadataAddress] = await getProgramDerivedAddress({
+      programAddress: TOKEN_METADATA_PROGRAM_ID,
+      seeds: ["metadata", addressEncoder.encode(TOKEN_METADATA_PROGRAM_ID), addressEncoder.encode(mint.address)],
+    });
 
     const data = Buffer.from(
       borsh.serialize(CreateTokenArgsSchema, {
@@ -102,53 +110,59 @@ describe("SPL Token Minter (Pinocchio)", () => {
       }),
     );
 
-    const ix = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: mintKeypair.publicKey, isSigner: true, isWritable: true }, // mint account
-        { pubkey: payer.publicKey, isSigner: false, isWritable: false }, // mint authority
-        { pubkey: metadataAddress, isSigner: false, isWritable: true }, // metadata account
-        { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // payer
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token program
-        { pubkey: TOKEN_METADATA_PROGRAM_ID, isSigner: false, isWritable: false }, // token metadata program
+    await send({
+      programAddress: programId,
+      accounts: [
+        { address: mint.address, role: AccountRole.WRITABLE_SIGNER, signer: mint }, // mint account
+        { address: payer.address, role: AccountRole.READONLY }, // mint authority
+        { address: metadataAddress, role: AccountRole.WRITABLE }, // metadata account
+        { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer }, // payer
+        { address: SYSTEM_PROGRAM_ID, role: AccountRole.READONLY }, // system program
+        { address: TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // token program
+        { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
       ],
-      data,
+      data: new Uint8Array(data),
     });
 
-    await sendInstruction(ix, [payer, mintKeypair]);
+    const mintAccount = svm.getAccount(mint.address);
+    if (!mintAccount?.exists) throw new Error("Mint account not found");
+    assert.equal(mintAccount.programAddress, TOKEN_PROGRAM_ID);
 
-    const mintAccount = await client.getAccount(mintKeypair.publicKey);
-    if (mintAccount === null) throw new Error("Mint account not found");
-    assert.deepEqual(mintAccount.owner.toBytes(), TOKEN_PROGRAM_ID.toBytes());
-
-    const metadataAccount = await client.getAccount(metadataAddress);
-    if (metadataAccount === null) throw new Error("Metadata account not found");
-    assert.deepEqual(metadataAccount.owner.toBytes(), TOKEN_METADATA_PROGRAM_ID.toBytes());
+    const metadataAccount = svm.getAccount(metadataAddress);
+    if (!metadataAccount?.exists) throw new Error("Metadata account not found");
+    assert.equal(metadataAccount.programAddress, TOKEN_METADATA_PROGRAM_ID);
     assert.isTrue(Buffer.from(metadataAccount.data).toString("utf-8").includes("Solana Gold"));
   });
 
   it("Mint some tokens to your wallet!", async () => {
-    const ata = getAssociatedTokenAddress(mintKeypair.publicKey, payer.publicKey);
-
-    const ix = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: mintKeypair.publicKey, isSigner: false, isWritable: true }, // mint account
-        { pubkey: payer.publicKey, isSigner: false, isWritable: false }, // mint authority
-        { pubkey: ata, isSigner: false, isWritable: true }, // associated token account
-        { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // payer
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token program
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // associated token program
+    const [ata] = await getProgramDerivedAddress({
+      programAddress: ASSOCIATED_TOKEN_PROGRAM_ID,
+      seeds: [
+        addressEncoder.encode(payer.address),
+        addressEncoder.encode(TOKEN_PROGRAM_ID),
+        addressEncoder.encode(mint.address),
       ],
-      data: Buffer.concat([Buffer.from([MINT]), u64le(150)]),
     });
 
-    await sendInstruction(ix, [payer]);
+    const data = Buffer.from(borsh.serialize(MintArgsSchema, { instruction: MINT, quantity: 150n }));
 
-    const ataAccount = await client.getAccount(ata);
-    if (ataAccount === null) throw new Error("Associated token account not found");
-    assert.equal(readTokenAmount(ataAccount.data), 150);
+    await send({
+      programAddress: programId,
+      accounts: [
+        { address: mint.address, role: AccountRole.WRITABLE }, // mint account
+        { address: payer.address, role: AccountRole.READONLY }, // mint authority
+        { address: ata, role: AccountRole.WRITABLE }, // associated token account
+        { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer }, // payer
+        { address: SYSTEM_PROGRAM_ID, role: AccountRole.READONLY }, // system program
+        { address: TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // token program
+        { address: ASSOCIATED_TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // associated token program
+      ],
+      data: new Uint8Array(data),
+    });
+
+    const ataAccount = svm.getAccount(ata);
+    if (!ataAccount?.exists) throw new Error("Associated token account not found");
+    const amount = Buffer.from(ataAccount.data).readBigUInt64LE(TOKEN_ACCOUNT_AMOUNT_OFFSET);
+    assert.equal(amount, 150n);
   });
 });
