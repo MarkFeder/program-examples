@@ -1,19 +1,25 @@
 import { Buffer } from "node:buffer";
+import * as path from "node:path";
 import {
-  Keypair,
-  PublicKey,
-  SYSVAR_RENT_PUBKEY,
-  SystemProgram,
-  Transaction,
-  TransactionInstruction,
-} from "@solana/web3.js";
+  AccountRole,
+  address,
+  appendTransactionMessageInstruction,
+  createTransactionMessage,
+  generateKeyPairSigner,
+  lamports,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  signTransactionMessageWithSigners,
+} from "@solana/kit";
 import * as borsh from "borsh";
 import { assert } from "chai";
-import { start } from "solana-bankrun";
+import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 
-// The Token-2022 program is bundled with bankrun, so there is no fixture to
-// load. Its ID is hard-coded here to avoid pulling in @solana/spl-token.
-const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+// LiteSVM's standard runtime bundles the SPL programs, so Token-2022 is already
+// loaded — its ID is hard-coded here to avoid pulling in @solana/spl-token.
+const TOKEN_2022_PROGRAM_ID = address("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SYSTEM_PROGRAM_ID = address("11111111111111111111111111111111");
+const RENT_SYSVAR_ID = address("SysvarRent111111111111111111111111111111111");
 
 // Borsh schema for the instruction data, matching the program's
 // `CreateTokenArgs` (and the native example's wire format).
@@ -31,53 +37,63 @@ const DECIMALS_OFFSET = 44; // in the base mint layout
 const NON_TRANSFERABLE_EXTENSION = 9;
 const ACCOUNT_TYPE_MINT = 1;
 
-describe("Token-2022 Non-Transferable (Pinocchio)", () => {
-  const PROGRAM_ID = PublicKey.unique();
-  let context: Awaited<ReturnType<typeof start>>;
-  let client: (typeof context)["banksClient"];
-  let payer: (typeof context)["payer"];
+// The compiled program artifact, produced by `build-and-test` into ./fixtures.
+// The npm scripts always run from the package root, so resolve from the cwd.
+const PROGRAM_SO = path.join(process.cwd(), "tests", "fixtures", "token_2022_non_transferable_pinocchio_program.so");
 
-  // A `describe` callback runs synchronously, so the async bankrun setup must
-  // live in a `before` hook — otherwise the `it` blocks register after Mocha
-  // has already collected the suite and nothing runs.
+describe("Token-2022 Non-Transferable (Pinocchio)", () => {
+  let svm: LiteSVM;
+  let programId: ReturnType<typeof address>;
+
   before(async () => {
-    context = await start([{ name: "token_2022_non_transferable_pinocchio_program", programId: PROGRAM_ID }], []);
-    client = context.banksClient;
-    payer = context.payer;
+    svm = new LiteSVM();
+    // The program never asserts its own id, so any address works; a generated
+    // one keeps the test self-contained.
+    programId = (await generateKeyPairSigner()).address;
+    svm.addProgramFromFile(programId, PROGRAM_SO);
   });
 
   it("Creates a Token-2022 non-transferable mint", async () => {
     const decimals = 9;
-    const mintKeypair = Keypair.generate();
+    const payer = await generateKeyPairSigner();
+    svm.airdrop(payer.address, lamports(1_000_000_000n));
+
+    const mint = await generateKeyPairSigner();
 
     const data = Buffer.from(borsh.serialize(CreateTokenArgsSchema, { token_decimals: decimals }));
 
-    const ix = new TransactionInstruction({
-      programId: PROGRAM_ID,
-      keys: [
-        { pubkey: mintKeypair.publicKey, isSigner: true, isWritable: true }, // mint account
-        { pubkey: payer.publicKey, isSigner: false, isWritable: false }, // mint authority
-        { pubkey: payer.publicKey, isSigner: true, isWritable: true }, // payer
-        { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false }, // rent sysvar
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system program
-        { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false }, // Token-2022 program
+    const ix = {
+      programAddress: programId,
+      accounts: [
+        { address: mint.address, role: AccountRole.WRITABLE_SIGNER, signer: mint }, // mint account
+        { address: payer.address, role: AccountRole.READONLY }, // mint authority
+        { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer }, // payer
+        { address: RENT_SYSVAR_ID, role: AccountRole.READONLY }, // rent sysvar
+        { address: SYSTEM_PROGRAM_ID, role: AccountRole.READONLY }, // system program
+        { address: TOKEN_2022_PROGRAM_ID, role: AccountRole.READONLY }, // Token-2022 program
       ],
-      data,
-    });
+      data: new Uint8Array(data),
+    };
 
-    const tx = new Transaction();
-    tx.feePayer = payer.publicKey;
-    tx.recentBlockhash = context.lastBlockhash;
-    tx.add(ix);
-    tx.sign(payer, mintKeypair);
-    await client.processTransaction(tx);
+    const transactionMessage = pipe(
+      createTransactionMessage({ version: 0 }),
+      (m) => setTransactionMessageFeePayerSigner(payer, m),
+      (m) => svm.setTransactionMessageLifetimeUsingLatestBlockhash(m),
+      (m) => appendTransactionMessageInstruction(ix, m),
+    );
 
-    const mintAccount = await client.getAccount(mintKeypair.publicKey);
-    if (mintAccount === null) throw new Error("Mint account not found");
+    const signedTx = await signTransactionMessageWithSigners(transactionMessage);
+    const result = svm.sendTransaction(signedTx);
+    if (result instanceof FailedTransactionMetadata) {
+      throw new Error(`Transaction failed: ${result.err()}`);
+    }
+
+    const mintAccount = svm.getAccount(mint.address);
+    if (!mintAccount?.exists) throw new Error("Mint account not found");
     const mintData = Buffer.from(mintAccount.data);
 
     // Owned by Token-2022, and sized for exactly one valueless extension.
-    assert.deepEqual(mintAccount.owner.toBytes(), TOKEN_2022_PROGRAM_ID.toBytes());
+    assert.equal(mintAccount.programAddress, TOKEN_2022_PROGRAM_ID);
     assert.equal(mintData.length, EXTENDED_MINT_SIZE);
 
     // Base mint fields were initialized.
@@ -89,6 +105,6 @@ describe("Token-2022 Non-Transferable (Pinocchio)", () => {
     assert.equal(mintData.readUInt16LE(TLV_TYPE_OFFSET), NON_TRANSFERABLE_EXTENSION);
     assert.equal(mintData.readUInt16LE(TLV_LENGTH_OFFSET), 0);
 
-    console.log("Mint address:", mintKeypair.publicKey.toBase58());
+    console.log("Mint address:", mint.address);
   });
 });
