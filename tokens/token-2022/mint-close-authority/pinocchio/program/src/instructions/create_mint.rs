@@ -4,7 +4,7 @@ use pinocchio::{
     cpi::invoke,
     error::ProgramError,
     instruction::{InstructionAccount, InstructionView},
-    sysvars::rent::{ACCOUNT_STORAGE_OVERHEAD, DEFAULT_LAMPORTS_PER_BYTE},
+    sysvars::{rent::Rent, Sysvar},
     AccountView, ProgramResult,
 };
 use pinocchio_log::log;
@@ -43,13 +43,9 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     let args = CreateTokenArgs::parse(data)?;
 
     // Fund the mint account with enough lamports to stay rent-exempt at the
-    // extended size, and create it owned by the Token-2022 program. Rent is
-    // computed with integer math using the network's default parameters
-    // (`DEFAULT_LAMPORTS_PER_BYTE` already folds in the 2-year exemption
-    // threshold). We avoid `Rent::try_minimum_balance`, whose floating-point
-    // exemption-threshold path emits an instruction the bankrun test VM rejects
-    // ("unsupported BPF instruction").
-    let lamports = (ACCOUNT_STORAGE_OVERHEAD + MINT_SIZE as u64) * DEFAULT_LAMPORTS_PER_BYTE;
+    // extended size, and create it owned by the Token-2022 program.
+    let rent = Rent::get()?;
+    let lamports = rent.try_minimum_balance(MINT_SIZE)?;
 
     log!("Creating mint account");
     CreateAccount {
