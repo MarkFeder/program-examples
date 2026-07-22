@@ -8,9 +8,18 @@ importers:
 
   .:
     dependencies:
+      '@solana-program/system':
+        specifier: ^0.12.2
+        version: 0.12.2(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana-program/token-2022':
+        specifier: ^0.12.0
+        version: 0.12.0(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(@solana/sysvars@6.10.0(typescript@5.9.3))
       '@solana/kit':
         specifier: ^6.10.0
         version: 6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@solana/sysvars':
+        specifier: ^6.10.0
+        version: 6.10.0(typescript@5.9.3)
       borsh:
         specifier: ^2.0.0
         version: 2.0.0
@@ -42,16 +51,40 @@ importers:
 
 packages:
 
+  '@noble/curves@1.9.7':
+    resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
+    engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@1.8.0':
+    resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
+    engines: {node: ^14.21.3 || >=16}
+
   '@solana-program/system@0.12.2':
     resolution: {integrity: sha512-MaBeOxlvTruQhA7UYkOb3hVTEHPPagOtd+PvTm6a8rGgvEAP0kD4BbC37NceOaR4ABNqdaCmD5OMVRKgrE6KAg==}
     peerDependencies:
       '@solana/kit': ^6.4.0
+
+  '@solana-program/token-2022@0.12.0':
+    resolution: {integrity: sha512-SXkN6Epy9sC3OEELJLhc0hZtUijsAlR2Nb5gP6jcc0WVrtj5wEAmksWxF/yYrAB8AisJVgxvODkhIAnrd02DIw==}
+    engines: {node: '>=24.0.0'}
+    peerDependencies:
+      '@solana/kit': ^6.4.0
+      '@solana/sysvars': ^5.0
+      '@solana/zk-sdk': ^0.4.2
+    peerDependenciesMeta:
+      '@solana/zk-sdk':
+        optional: true
 
   '@solana-program/token@0.14.0':
     resolution: {integrity: sha512-zpLMr6JZndlsQCQvrm0gezfwdr1lmzOGqN6v2WIYXjtDmbF+xg6zh/MAp2UFHRpv3uDmylEdjtQo05pa2OeaYg==}
     engines: {node: '>=24.0.0'}
     peerDependencies:
       '@solana/kit': ^6.5.0
+
+  '@solana-program/zk-elgamal-proof@0.2.0':
+    resolution: {integrity: sha512-znu1asnySKVp0VyOlfXCLZhpdWvyq/tJ7GRrX61Z6vyXXqJ/OMizv2BkgYL/VbzDKkFmUiYfiFwF3gDtZHv7VA==}
+    peerDependencies:
+      '@solana/kit': ^5.0
 
   '@solana/accounts@6.10.0':
     resolution: {integrity: sha512-+FxfDOrnifoPlBkF+fr8eeQdgM6xtIgAg9xKMu3WnIz60oZd4Xnry6+ff6t+ePPoZZp397FSg9ZJet68VCWm5Q==}
@@ -933,11 +966,29 @@ packages:
 
 snapshots:
 
+  '@noble/curves@1.9.7':
+    dependencies:
+      '@noble/hashes': 1.8.0
+
+  '@noble/hashes@1.8.0': {}
+
   '@solana-program/system@0.12.2(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
     dependencies:
       '@solana/kit': 6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
 
+  '@solana-program/token-2022@0.12.0(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))(@solana/sysvars@6.10.0(typescript@5.9.3))':
+    dependencies:
+      '@noble/curves': 1.9.7
+      '@solana-program/zk-elgamal-proof': 0.2.0(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana/kit': 6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      '@solana/sysvars': 6.10.0(typescript@5.9.3)
+
   '@solana-program/token@0.14.0(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
+    dependencies:
+      '@solana-program/system': 0.12.2(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana/kit': 6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+
+  '@solana-program/zk-elgamal-proof@0.2.0(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
     dependencies:
       '@solana-program/system': 0.12.2(@solana/kit@6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
       '@solana/kit': 6.10.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
