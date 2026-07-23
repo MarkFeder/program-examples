@@ -13,17 +13,18 @@ import {
   setTransactionMessageFeePayerSigner,
   signTransactionMessageWithSigners,
 } from "@solana/kit";
+import { SYSTEM_PROGRAM_ADDRESS } from "@solana-program/system";
+import { ASSOCIATED_TOKEN_PROGRAM_ADDRESS, getTokenDecoder, TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
 import * as borsh from "borsh";
 import { assert } from "chai";
 import { FailedTransactionMetadata, LiteSVM } from "litesvm";
 
 // The legacy SPL Token and Associated Token Account programs are bundled with
-// LiteSVM's standard runtime. The Metaplex Token Metadata program is not, so it
-// is dumped from mainnet into tests/fixtures by prepare.mjs and loaded below.
-const TOKEN_PROGRAM_ID = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const ASSOCIATED_TOKEN_PROGRAM_ID = address("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+// LiteSVM's standard runtime, and their ids come from the official
+// @solana-program/token client. The Metaplex Token Metadata program is not
+// bundled and has no official @solana-program client, so its id stays
+// hand-rolled and it is dumped from mainnet into tests/fixtures by prepare.mjs.
 const TOKEN_METADATA_PROGRAM_ID = address("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
-const SYSTEM_PROGRAM_ID = address("11111111111111111111111111111111");
 
 // Instruction discriminators (the Borsh enum variant index).
 const CREATE = 0;
@@ -39,9 +40,6 @@ const CreateTokenArgsSchema: borsh.Schema = {
     nft_uri: "string",
   },
 };
-
-// The SPL token account `amount` is a u64 LE at offset 64.
-const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
 
 // The compiled program artifacts live in ./fixtures: the pinocchio program is
 // built there by `build-and-test`, and token_metadata.so is dumped from mainnet
@@ -70,8 +68,8 @@ async function getMasterEditionAddress(mint: ReturnType<typeof address>) {
 
 async function getAssociatedTokenAddress(mint: ReturnType<typeof address>, owner: ReturnType<typeof address>) {
   const [ata] = await getProgramDerivedAddress({
-    programAddress: ASSOCIATED_TOKEN_PROGRAM_ID,
-    seeds: [addressEncoder.encode(owner), addressEncoder.encode(TOKEN_PROGRAM_ID), addressEncoder.encode(mint)],
+    programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
+    seeds: [addressEncoder.encode(owner), addressEncoder.encode(TOKEN_PROGRAM_ADDRESS), addressEncoder.encode(mint)],
   });
   return ata;
 }
@@ -133,8 +131,8 @@ describe("NFT Minter (Pinocchio)", () => {
         { address: payer.address, role: AccountRole.READONLY }, // mint authority
         { address: metadataAddress, role: AccountRole.WRITABLE }, // metadata account
         { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer }, // payer
-        { address: SYSTEM_PROGRAM_ID, role: AccountRole.READONLY }, // system program
-        { address: TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // token program
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // system program
+        { address: TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // token program
         { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
       ],
       data: new Uint8Array(data),
@@ -142,7 +140,7 @@ describe("NFT Minter (Pinocchio)", () => {
 
     const mintAccount = svm.getAccount(mint.address);
     if (!mintAccount?.exists) throw new Error("Mint account not found");
-    assert.equal(mintAccount.programAddress, TOKEN_PROGRAM_ID);
+    assert.equal(mintAccount.programAddress, TOKEN_PROGRAM_ADDRESS);
 
     const metadataAccount = svm.getAccount(metadataAddress);
     if (!metadataAccount?.exists) throw new Error("Metadata account not found");
@@ -164,9 +162,9 @@ describe("NFT Minter (Pinocchio)", () => {
         { address: payer.address, role: AccountRole.READONLY }, // mint authority
         { address: ata, role: AccountRole.WRITABLE }, // associated token account
         { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer }, // payer
-        { address: SYSTEM_PROGRAM_ID, role: AccountRole.READONLY }, // system program
-        { address: TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // token program
-        { address: ASSOCIATED_TOKEN_PROGRAM_ID, role: AccountRole.READONLY }, // associated token program
+        { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // system program
+        { address: TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // token program
+        { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // associated token program
         { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
       ],
       data: new Uint8Array([MINT]),
@@ -175,7 +173,9 @@ describe("NFT Minter (Pinocchio)", () => {
     // The NFT (a single token) landed in the payer's associated token account.
     const ataAccount = svm.getAccount(ata);
     if (!ataAccount?.exists) throw new Error("Associated token account not found");
-    const amount = Buffer.from(ataAccount.data).readBigUInt64LE(TOKEN_ACCOUNT_AMOUNT_OFFSET);
+    // Decode the token account with the official codec instead of reading the
+    // `amount` field from a raw byte offset by hand.
+    const amount = getTokenDecoder().decode(ataAccount.data).amount;
     assert.equal(amount, 1n);
 
     // The master edition account exists and is owned by the Token Metadata
