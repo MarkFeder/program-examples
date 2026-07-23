@@ -4,7 +4,7 @@ use pinocchio::{
     cpi::{invoke_signed, Seed, Signer},
     error::ProgramError,
     instruction::{InstructionAccount, InstructionView},
-    sysvars::rent::{ACCOUNT_STORAGE_OVERHEAD, DEFAULT_LAMPORTS_PER_BYTE},
+    sysvars::{rent::Rent, Sysvar},
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
@@ -60,13 +60,10 @@ pub fn create_token(program_id: &Address, accounts: &[AccountView], data: &[u8])
         return Err(ProgramError::InvalidSeeds);
     }
 
-    // Fund the mint account with enough lamports to stay rent-exempt. Rent is
-    // computed with integer math using the network's default parameters
-    // (`DEFAULT_LAMPORTS_PER_BYTE` already folds in the 2-year exemption
-    // threshold). We avoid `Rent::try_minimum_balance`, whose floating-point
-    // exemption-threshold path emits an instruction the bankrun test VM rejects
-    // ("unsupported BPF instruction").
-    let lamports = (ACCOUNT_STORAGE_OVERHEAD + MINT_SIZE as u64) * DEFAULT_LAMPORTS_PER_BYTE;
+    // Fund the mint account with enough lamports to stay rent-exempt, read from
+    // the Rent sysvar.
+    let rent = Rent::get()?;
+    let lamports = rent.try_minimum_balance(MINT_SIZE)?;
 
     log!("Creating mint account");
     CreateAccount {
