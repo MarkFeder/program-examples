@@ -75,8 +75,14 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     }
     .invoke()?;
 
-    // The max fee is 5 tokens, scaled by the mint's decimals.
-    let max_fee = 5u64 * 10u64.pow(args.decimals as u32);
+    // The max fee is 5 tokens, scaled by the mint's decimals. Guard the scaling
+    // with checked arithmetic: `decimals` is unvalidated instruction input, and
+    // the workspace enables `overflow-checks`, so a large value (>= 19) would
+    // otherwise panic and abort the transaction instead of failing cleanly.
+    let max_fee = 10u64
+        .checked_pow(args.decimals as u32)
+        .and_then(|scale| scale.checked_mul(5))
+        .ok_or(ProgramError::InvalidInstructionData)?;
 
     // The `TransferFeeConfig` extension must be initialized *before* the mint
     // itself — extensions live in the space past the base mint and Token-2022
