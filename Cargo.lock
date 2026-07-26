@@ -5956,6 +5956,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "token-2022-transfer-fee-pinocchio-program"
+version = "0.1.0"
+dependencies = [
+ "pinocchio 0.10.2",
+ "pinocchio-log",
+ "pinocchio-system",
+]
+
+[[package]]
 name = "token-2022-transfer-fees-program"
 version = "0.1.0"
 dependencies = [
