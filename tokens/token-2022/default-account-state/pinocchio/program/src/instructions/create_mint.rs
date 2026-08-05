@@ -47,12 +47,10 @@ const ACCOUNT_STATE_FROZEN: u8 = 2;
 ///   5. `[]`                 Token-2022 program
 ///
 /// Instruction data: Borsh `[decimals: u8]`.
-pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
+pub fn create_mint(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     // `system_program` and `token_program` are unused directly, but must be
     // supplied so they are present in the transaction for the CPIs below.
-    let [mint_account, mint_authority, payer, rent_sysvar, _system_program, _token_program] =
-        accounts
-    else {
+    let [mint_account, mint_authority, payer, rent_sysvar, _system_program, _token_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -64,68 +62,42 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     let lamports = rent.try_minimum_balance(MINT_SIZE)?;
 
     log!("Creating mint account");
-    CreateAccount {
-        from: payer,
-        to: mint_account,
-        lamports,
-        space: MINT_SIZE as u64,
-        owner: &TOKEN_2022_PROGRAM_ID,
-    }
-    .invoke()?;
+    CreateAccount { from: payer, to: mint_account, lamports, space: MINT_SIZE as u64, owner: &TOKEN_2022_PROGRAM_ID }
+        .invoke()?;
 
     // The `DefaultAccountState` extension must be initialized *before* the mint
     // itself — extensions live in the space past the base mint and Token-2022
     // rejects initializing them once `InitializeMint` has run.
     log!("Initializing default account state extension (Frozen)");
-    let init_state_data = [
-        DEFAULT_ACCOUNT_STATE_EXTENSION,
-        DEFAULT_ACCOUNT_STATE_INITIALIZE,
-        ACCOUNT_STATE_FROZEN,
-    ];
+    let init_state_data = [DEFAULT_ACCOUNT_STATE_EXTENSION, DEFAULT_ACCOUNT_STATE_INITIALIZE, ACCOUNT_STATE_FROZEN];
     let init_state_accounts = [InstructionAccount::writable(mint_account.address())];
     invoke(
-        &InstructionView {
-            program_id: &TOKEN_2022_PROGRAM_ID,
-            accounts: &init_state_accounts,
-            data: &init_state_data,
-        },
-        &[mint_account],
+        &InstructionView { program_id: &TOKEN_2022_PROGRAM_ID, accounts: &init_state_accounts, data: &init_state_data },
+        &[*mint_account],
     )?;
 
     log!("Initializing mint");
     let mint_data = build_initialize_mint_data(mint_authority, args.decimals);
-    let mint_accounts = [
-        InstructionAccount::writable(mint_account.address()),
-        InstructionAccount::readonly(rent_sysvar.address()),
-    ];
+    let mint_accounts =
+        [InstructionAccount::writable(mint_account.address()), InstructionAccount::readonly(rent_sysvar.address())];
     invoke(
-        &InstructionView {
-            program_id: &TOKEN_2022_PROGRAM_ID,
-            accounts: &mint_accounts,
-            data: &mint_data,
-        },
-        &[mint_account, rent_sysvar],
+        &InstructionView { program_id: &TOKEN_2022_PROGRAM_ID, accounts: &mint_accounts, data: &mint_data },
+        &[*mint_account, *rent_sysvar],
     )?;
 
     // Updating the default state can only happen once the mint is initialized,
     // and must be signed by the mint's freeze authority (here, the payer).
     log!("Updating default account state (Initialized)");
-    let update_state_data = [
-        DEFAULT_ACCOUNT_STATE_EXTENSION,
-        DEFAULT_ACCOUNT_STATE_UPDATE,
-        ACCOUNT_STATE_INITIALIZED,
-    ];
-    let update_state_accounts = [
-        InstructionAccount::writable(mint_account.address()),
-        InstructionAccount::readonly_signer(payer.address()),
-    ];
+    let update_state_data = [DEFAULT_ACCOUNT_STATE_EXTENSION, DEFAULT_ACCOUNT_STATE_UPDATE, ACCOUNT_STATE_INITIALIZED];
+    let update_state_accounts =
+        [InstructionAccount::writable(mint_account.address()), InstructionAccount::readonly_signer(payer.address())];
     invoke(
         &InstructionView {
             program_id: &TOKEN_2022_PROGRAM_ID,
             accounts: &update_state_accounts,
             data: &update_state_data,
         },
-        &[mint_account, payer],
+        &[*mint_account, *payer],
     )?;
 
     log!("Mint created");
