@@ -5,11 +5,8 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
-use pinocchio_pubkey::derive_address;
 
-use crate::instructions::{
-    build_verify_collection_data, read_bump, AUTHORITY_SEED, TOKEN_METADATA_PROGRAM_ID,
-};
+use crate::instructions::{build_verify_collection_data, read_bump, AUTHORITY_SEED, TOKEN_METADATA_PROGRAM_ID};
 
 /// Verifies an NFT as a member of its collection via the Metaplex `Verify`
 /// instruction (`VerificationArgs::CollectionV1`), signed by the collection's
@@ -27,11 +24,7 @@ use crate::instructions::{
 ///   8. `[]`                 token metadata program
 ///
 /// Instruction data: `[authority_bump: u8]`.
-pub fn verify_collection(
-    program_id: &Address,
-    accounts: &[AccountView],
-    args: &[u8],
-) -> ProgramResult {
+pub fn verify_collection(program_id: &Address, accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [payer, mint_authority, metadata, collection_mint, collection_metadata, collection_master_edition, system_program, sysvar_instructions, token_metadata_program] =
         accounts
     else {
@@ -44,8 +37,9 @@ pub fn verify_collection(
 
     // Confirm the supplied account is the canonical mint-authority PDA.
     let bump = read_bump(args)?;
-    let pda = derive_address(&[AUTHORITY_SEED], Some(bump), program_id.as_array());
-    if mint_authority.address().as_array() != &pda {
+    // Derive the canonical PDA on-chain and reject a non-canonical bump.
+    let (pda, canonical_bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
+    if mint_authority.address() != &pda || bump != canonical_bump {
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -67,24 +61,21 @@ pub fn verify_collection(
         InstructionAccount::readonly(system_program.address()),
         InstructionAccount::readonly(sysvar_instructions.address()),
     ];
-    let instruction = InstructionView {
-        program_id: &TOKEN_METADATA_PROGRAM_ID,
-        accounts: &verify_accounts,
-        data: &data,
-    };
+    let instruction =
+        InstructionView { program_id: &TOKEN_METADATA_PROGRAM_ID, accounts: &verify_accounts, data: &data };
 
     log!("Verifying collection");
     invoke_signed(
         &instruction,
         &[
-            mint_authority,
-            token_metadata_program,
-            metadata,
-            collection_mint,
-            collection_metadata,
-            collection_master_edition,
-            system_program,
-            sysvar_instructions,
+            *mint_authority,
+            *token_metadata_program,
+            *metadata,
+            *collection_mint,
+            *collection_metadata,
+            *collection_master_edition,
+            *system_program,
+            *sysvar_instructions,
         ],
         &signers,
     )?;

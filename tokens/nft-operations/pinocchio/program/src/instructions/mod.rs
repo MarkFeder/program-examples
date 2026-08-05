@@ -42,9 +42,7 @@ const VERIFY_COLLECTION_V1: u8 = 1;
 
 /// Reads the `authority_bump` carried by every instruction's data.
 pub(crate) fn read_bump(args: &[u8]) -> Result<u8, ProgramError> {
-    args.first()
-        .copied()
-        .ok_or(ProgramError::InvalidInstructionData)
+    args.first().copied().ok_or(ProgramError::InvalidInstructionData)
 }
 
 /// Serializes the data for a Metaplex `CreateMetadataAccountV3` instruction.
@@ -149,23 +147,8 @@ pub(crate) fn create_metadata_cpi(
         InstructionAccount::readonly(mint_authority.address()),
         InstructionAccount::readonly(system_program.address()),
     ];
-    let instruction = InstructionView {
-        program_id: &TOKEN_METADATA_PROGRAM_ID,
-        accounts: &accounts,
-        data,
-    };
-    invoke_signed(
-        &instruction,
-        &[
-            metadata,
-            mint,
-            mint_authority,
-            payer,
-            mint_authority,
-            system_program,
-        ],
-        signers,
-    )
+    let instruction = InstructionView { program_id: &TOKEN_METADATA_PROGRAM_ID, accounts: &accounts, data };
+    invoke_signed(&instruction, &[*metadata, *mint, *mint_authority, *payer, *mint_authority, *system_program], signers)
 }
 
 /// Invokes Metaplex `CreateMasterEditionV3`, signed by the mint-authority PDA.
@@ -196,23 +179,10 @@ pub(crate) fn create_master_edition_cpi(
         InstructionAccount::readonly(token_program.address()),
         InstructionAccount::readonly(system_program.address()),
     ];
-    let instruction = InstructionView {
-        program_id: &TOKEN_METADATA_PROGRAM_ID,
-        accounts: &accounts,
-        data: &data,
-    };
+    let instruction = InstructionView { program_id: &TOKEN_METADATA_PROGRAM_ID, accounts: &accounts, data: &data };
     invoke_signed(
         &instruction,
-        &[
-            edition,
-            mint,
-            mint_authority,
-            mint_authority,
-            payer,
-            metadata,
-            token_program,
-            system_program,
-        ],
+        &[*edition, *mint, *mint_authority, *mint_authority, *payer, *metadata, *token_program, *system_program],
         signers,
     )
 }

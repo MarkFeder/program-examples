@@ -6,13 +6,12 @@ use pinocchio::{
 };
 use pinocchio_associated_token_account::instructions::CreateIdempotent;
 use pinocchio_log::log;
-use pinocchio_pubkey::derive_address;
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::{InitializeMint2, MintTo};
 
 use crate::instructions::{
-    build_metadata_data, create_master_edition_cpi, create_metadata_cpi, read_bump, AUTHORITY_SEED,
-    MINT_SIZE, TOKEN_DECIMALS,
+    build_metadata_data, create_master_edition_cpi, create_metadata_cpi, read_bump, AUTHORITY_SEED, MINT_SIZE,
+    TOKEN_DECIMALS,
 };
 
 /// Creates a collection NFT: a 0-decimal mint whose authority is the program's
@@ -32,11 +31,7 @@ use crate::instructions::{
 ///   9. `[]`                 token metadata program
 ///
 /// Instruction data: `[authority_bump: u8]`.
-pub fn create_collection(
-    program_id: &Address,
-    accounts: &[AccountView],
-    args: &[u8],
-) -> ProgramResult {
+pub fn create_collection(program_id: &Address, accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
     let [user, mint, mint_authority, metadata, master_edition, destination, system_program, token_program, _associated_token_program, _token_metadata_program] =
         accounts
     else {
@@ -49,8 +44,9 @@ pub fn create_collection(
 
     // Confirm the supplied account is the canonical mint-authority PDA.
     let bump = read_bump(args)?;
-    let pda = derive_address(&[AUTHORITY_SEED], Some(bump), program_id.as_array());
-    if mint_authority.address().as_array() != &pda {
+    // Derive the canonical PDA on-chain and reject a non-canonical bump.
+    let (pda, canonical_bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
+    if mint_authority.address() != &pda || bump != canonical_bump {
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -59,14 +55,7 @@ pub fn create_collection(
     let rent = Rent::get()?;
     let lamports = rent.try_minimum_balance(MINT_SIZE)?;
     log!("Creating mint account");
-    CreateAccount {
-        from: user,
-        to: mint,
-        lamports,
-        space: MINT_SIZE as u64,
-        owner: &pinocchio_token::ID,
-    }
-    .invoke()?;
+    CreateAccount { from: user, to: mint, lamports, space: MINT_SIZE as u64, owner: &pinocchio_token::ID }.invoke()?;
 
     log!("Initializing mint account");
     InitializeMint2 {
@@ -83,43 +72,17 @@ pub fn create_collection(
     let signers = [Signer::from(&seeds)];
 
     log!("Creating destination token account");
-    CreateIdempotent {
-        funding_account: user,
-        account: destination,
-        wallet: user,
-        mint,
-        system_program,
-        token_program,
-    }
-    .invoke()?;
+    CreateIdempotent { funding_account: user, account: destination, wallet: user, mint, system_program, token_program }
+        .invoke()?;
 
     log!("Minting collection NFT");
-    MintTo {
-        mint,
-        account: destination,
-        mint_authority,
-        amount: 1,
-    }
-    .invoke_signed(&signers)?;
+    MintTo { mint, account: destination, mint_authority, amount: 1, multisig_signers: &[] as &[&AccountView] }
+        .invoke_signed(&signers)?;
 
     log!("Creating metadata account");
-    let metadata_data = build_metadata_data(
-        "DummyCollection",
-        "DC",
-        "",
-        mint_authority.address().as_array(),
-        None,
-        true,
-    );
-    create_metadata_cpi(
-        metadata,
-        mint,
-        mint_authority,
-        user,
-        system_program,
-        &metadata_data,
-        &signers,
-    )?;
+    let metadata_data =
+        build_metadata_data("DummyCollection", "DC", "", mint_authority.address().as_array(), None, true);
+    create_metadata_cpi(metadata, mint, mint_authority, user, system_program, &metadata_data, &signers)?;
 
     log!("Creating master edition account");
     create_master_edition_cpi(
