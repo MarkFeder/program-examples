@@ -49,12 +49,10 @@ const UPDATED_FEE_BASIS_POINTS: u16 = 1000;
 ///   5. `[]`                 Token-2022 program
 ///
 /// Instruction data: Borsh `[decimals: u8]`.
-pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
+pub fn create_mint(accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     // `system_program` and `token_program` are unused directly, but must be
     // supplied so they are present in the transaction for the CPIs below.
-    let [mint_account, mint_authority, payer, rent_sysvar, _system_program, _token_program] =
-        accounts
-    else {
+    let [mint_account, mint_authority, payer, rent_sysvar, _system_program, _token_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
@@ -66,14 +64,8 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     let lamports = rent.try_minimum_balance(MINT_SIZE)?;
 
     log!("Creating mint account");
-    CreateAccount {
-        from: payer,
-        to: mint_account,
-        lamports,
-        space: MINT_SIZE as u64,
-        owner: &TOKEN_2022_PROGRAM_ID,
-    }
-    .invoke()?;
+    CreateAccount { from: payer, to: mint_account, lamports, space: MINT_SIZE as u64, owner: &TOKEN_2022_PROGRAM_ID }
+        .invoke()?;
 
     // The max fee is 5 tokens, scaled by the mint's decimals. Guard the scaling
     // with checked arithmetic: `decimals` is unvalidated instruction input, and
@@ -88,48 +80,31 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
     // itself — extensions live in the space past the base mint and Token-2022
     // rejects initializing them once `InitializeMint` has run.
     log!("Initializing transfer fee config (1%)");
-    let init_fee_data =
-        build_initialize_transfer_fee_config_data(payer, INITIAL_FEE_BASIS_POINTS, max_fee);
+    let init_fee_data = build_initialize_transfer_fee_config_data(payer, INITIAL_FEE_BASIS_POINTS, max_fee);
     let init_fee_accounts = [InstructionAccount::writable(mint_account.address())];
     invoke(
-        &InstructionView {
-            program_id: &TOKEN_2022_PROGRAM_ID,
-            accounts: &init_fee_accounts,
-            data: &init_fee_data,
-        },
-        &[mint_account],
+        &InstructionView { program_id: &TOKEN_2022_PROGRAM_ID, accounts: &init_fee_accounts, data: &init_fee_data },
+        &[*mint_account],
     )?;
 
     log!("Initializing mint");
     let mint_data = build_initialize_mint_data(mint_authority, args.decimals);
-    let mint_accounts = [
-        InstructionAccount::writable(mint_account.address()),
-        InstructionAccount::readonly(rent_sysvar.address()),
-    ];
+    let mint_accounts =
+        [InstructionAccount::writable(mint_account.address()), InstructionAccount::readonly(rent_sysvar.address())];
     invoke(
-        &InstructionView {
-            program_id: &TOKEN_2022_PROGRAM_ID,
-            accounts: &mint_accounts,
-            data: &mint_data,
-        },
-        &[mint_account, rent_sysvar],
+        &InstructionView { program_id: &TOKEN_2022_PROGRAM_ID, accounts: &mint_accounts, data: &mint_data },
+        &[*mint_account, *rent_sysvar],
     )?;
 
     // Updating the fee can only happen once the mint is initialized, and must be
     // signed by the transfer-fee config authority (here, the payer).
     log!("Updating transfer fee (10%)");
     let set_fee_data = build_set_transfer_fee_data(UPDATED_FEE_BASIS_POINTS, max_fee);
-    let set_fee_accounts = [
-        InstructionAccount::writable(mint_account.address()),
-        InstructionAccount::readonly_signer(payer.address()),
-    ];
+    let set_fee_accounts =
+        [InstructionAccount::writable(mint_account.address()), InstructionAccount::readonly_signer(payer.address())];
     invoke(
-        &InstructionView {
-            program_id: &TOKEN_2022_PROGRAM_ID,
-            accounts: &set_fee_accounts,
-            data: &set_fee_data,
-        },
-        &[mint_account, payer],
+        &InstructionView { program_id: &TOKEN_2022_PROGRAM_ID, accounts: &set_fee_accounts, data: &set_fee_data },
+        &[*mint_account, *payer],
     )?;
 
     log!("Mint created");
@@ -144,11 +119,7 @@ pub fn create_mint(accounts: &[AccountView], data: &[u8]) -> ProgramResult {
 /// maximum_fee: u64`. A present `COption` pubkey is a `1` tag byte followed by
 /// the 32-byte key; multi-byte integers are little-endian. Both authorities are
 /// set to the payer.
-fn build_initialize_transfer_fee_config_data(
-    authority: &AccountView,
-    basis_points: u16,
-    maximum_fee: u64,
-) -> Vec<u8> {
+fn build_initialize_transfer_fee_config_data(authority: &AccountView, basis_points: u16, maximum_fee: u64) -> Vec<u8> {
     let mut data = Vec::with_capacity(78);
     data.push(TRANSFER_FEE_EXTENSION);
     data.push(INITIALIZE_TRANSFER_FEE_CONFIG);
