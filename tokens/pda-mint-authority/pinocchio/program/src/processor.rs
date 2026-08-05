@@ -12,12 +12,10 @@ use crate::instructions::{create_token, init, mint_to};
 ///   - `2` -> Mint   (no args)
 pub fn process_instruction(
     program_id: &Address,
-    accounts: &[AccountView],
+    accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let (discriminator, args) = instruction_data
-        .split_first()
-        .ok_or(ProgramError::InvalidInstructionData)?;
+    let (discriminator, args) = instruction_data.split_first().ok_or(ProgramError::InvalidInstructionData)?;
 
     match *discriminator {
         0 => {

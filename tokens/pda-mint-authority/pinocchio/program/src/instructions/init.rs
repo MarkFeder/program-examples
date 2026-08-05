@@ -5,7 +5,6 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
-use pinocchio_pubkey::derive_address;
 use pinocchio_system::instructions::CreateAccount;
 
 use crate::state::MintAuthorityPda;
@@ -22,20 +21,18 @@ use crate::state::MintAuthorityPda;
 ///   2. `[]`                 system program
 ///
 /// Instruction data: `[bump: u8]` (the canonical bump for the PDA).
-pub fn init(program_id: &Address, accounts: &[AccountView], data: &[u8]) -> ProgramResult {
+pub fn init(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     let [mint_authority, payer, _system_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
     let bump = *data.first().ok_or(ProgramError::InvalidInstructionData)?;
 
-    // Verify the supplied account is the canonical PDA for this bump.
-    let pda = derive_address(
-        &[MintAuthorityPda::SEED_PREFIX],
-        Some(bump),
-        program_id.as_array(),
-    );
-    if mint_authority.address().as_array() != &pda {
+    // Derive the canonical PDA on-chain and require both the supplied account and
+    // bump to match it, so a non-canonical bump cannot create the account at a
+    // different address than clients derive with `findProgramAddressSync`.
+    let (pda, canonical_bump) = Address::find_program_address(&[MintAuthorityPda::SEED_PREFIX], program_id);
+    if mint_authority.address() != &pda || bump != canonical_bump {
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -43,10 +40,7 @@ pub fn init(program_id: &Address, accounts: &[AccountView], data: &[u8]) -> Prog
     let rent = Rent::get()?;
     let lamports = rent.try_minimum_balance(MintAuthorityPda::ACCOUNT_SPACE)?;
     let bump_bytes = [bump];
-    let seeds = [
-        Seed::from(MintAuthorityPda::SEED_PREFIX),
-        Seed::from(&bump_bytes),
-    ];
+    let seeds = [Seed::from(MintAuthorityPda::SEED_PREFIX), Seed::from(&bump_bytes)];
     let signers = [Signer::from(&seeds)];
 
     log!("Creating mint authority PDA");

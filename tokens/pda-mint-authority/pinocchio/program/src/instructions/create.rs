@@ -8,7 +8,6 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
-use pinocchio_pubkey::derive_address;
 use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::InitializeMint2;
 
@@ -37,7 +36,7 @@ const CREATE_METADATA_ACCOUNT_V3: u8 = 33;
 /// The mint authority is the program-derived address, so the metadata CPI (which
 /// requires the mint authority to sign) is authorized with the PDA's seeds via
 /// `invoke_signed` rather than a wallet signature.
-pub fn create_token(program_id: &Address, accounts: &[AccountView], data: &[u8]) -> ProgramResult {
+pub fn create_token(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     // `token_program` and `token_metadata_program` are unused directly, but must
     // be supplied so they are present in the transaction for the CPIs below.
     let [mint_account, mint_authority, metadata_account, payer, system_program, _token_program, _token_metadata_program] =
@@ -51,12 +50,8 @@ pub fn create_token(program_id: &Address, accounts: &[AccountView], data: &[u8])
     // Recover the PDA bump recorded by `init` and confirm the supplied account is
     // the canonical mint-authority PDA.
     let bump = MintAuthorityPda::deserialize(&mint_authority.try_borrow()?)?.bump;
-    let pda = derive_address(
-        &[MintAuthorityPda::SEED_PREFIX],
-        Some(bump),
-        program_id.as_array(),
-    );
-    if mint_authority.address().as_array() != &pda {
+    let (pda, _) = Address::find_program_address(&[MintAuthorityPda::SEED_PREFIX], program_id);
+    if mint_authority.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
 
@@ -66,14 +61,8 @@ pub fn create_token(program_id: &Address, accounts: &[AccountView], data: &[u8])
     let lamports = rent.try_minimum_balance(MINT_SIZE)?;
 
     log!("Creating mint account");
-    CreateAccount {
-        from: payer,
-        to: mint_account,
-        lamports,
-        space: MINT_SIZE as u64,
-        owner: &pinocchio_token::ID,
-    }
-    .invoke()?;
+    CreateAccount { from: payer, to: mint_account, lamports, space: MINT_SIZE as u64, owner: &pinocchio_token::ID }
+        .invoke()?;
 
     log!("Initializing mint account");
     InitializeMint2 {
@@ -95,30 +84,17 @@ pub fn create_token(program_id: &Address, accounts: &[AccountView], data: &[u8])
         InstructionAccount::readonly(mint_authority.address()),
         InstructionAccount::readonly(system_program.address()),
     ];
-    let instruction = InstructionView {
-        program_id: &TOKEN_METADATA_PROGRAM_ID,
-        accounts: &metadata_accounts,
-        data: &metadata_data,
-    };
+    let instruction =
+        InstructionView { program_id: &TOKEN_METADATA_PROGRAM_ID, accounts: &metadata_accounts, data: &metadata_data };
 
     // Sign for the mint-authority PDA.
     let bump_bytes = [bump];
-    let seeds = [
-        Seed::from(MintAuthorityPda::SEED_PREFIX),
-        Seed::from(&bump_bytes),
-    ];
+    let seeds = [Seed::from(MintAuthorityPda::SEED_PREFIX), Seed::from(&bump_bytes)];
     let signers = [Signer::from(&seeds)];
 
     invoke_signed(
         &instruction,
-        &[
-            metadata_account,
-            mint_account,
-            mint_authority,
-            payer,
-            mint_authority,
-            system_program,
-        ],
+        &[*metadata_account, *mint_account, *mint_authority, *payer, *mint_authority, *system_program],
         &signers,
     )?;
 

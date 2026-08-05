@@ -8,7 +8,6 @@ use pinocchio::{
 };
 use pinocchio_associated_token_account::instructions::CreateIdempotent;
 use pinocchio_log::log;
-use pinocchio_pubkey::derive_address;
 use pinocchio_token::instructions::MintTo;
 
 use crate::instructions::TOKEN_METADATA_PROGRAM_ID;
@@ -37,7 +36,7 @@ const CREATE_MASTER_EDITION_V3: u8 = 17;
 ///   9. `[]`                 token metadata program
 ///
 /// Instruction data: none.
-pub fn mint_to(program_id: &Address, accounts: &[AccountView]) -> ProgramResult {
+pub fn mint_to(program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
     // `associated_token_program` and `token_metadata_program` are unused
     // directly, but must be supplied so they are present for the CPIs below.
     let [mint_account, metadata_account, edition_account, mint_authority, associated_token_account, payer, system_program, token_program, _associated_token_program, _token_metadata_program] =
@@ -49,21 +48,14 @@ pub fn mint_to(program_id: &Address, accounts: &[AccountView]) -> ProgramResult 
     // Recover the PDA bump recorded by `init` and confirm the supplied account is
     // the canonical mint-authority PDA.
     let bump = MintAuthorityPda::deserialize(&mint_authority.try_borrow()?)?.bump;
-    let pda = derive_address(
-        &[MintAuthorityPda::SEED_PREFIX],
-        Some(bump),
-        program_id.as_array(),
-    );
-    if mint_authority.address().as_array() != &pda {
+    let (pda, _) = Address::find_program_address(&[MintAuthorityPda::SEED_PREFIX], program_id);
+    if mint_authority.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
 
     // Signer seeds for the mint-authority PDA, reused by both CPIs below.
     let bump_bytes = [bump];
-    let seeds = [
-        Seed::from(MintAuthorityPda::SEED_PREFIX),
-        Seed::from(&bump_bytes),
-    ];
+    let seeds = [Seed::from(MintAuthorityPda::SEED_PREFIX), Seed::from(&bump_bytes)];
     let signers = [Signer::from(&seeds)];
 
     log!("Creating associated token account if needed");
@@ -83,6 +75,7 @@ pub fn mint_to(program_id: &Address, accounts: &[AccountView]) -> ProgramResult 
         account: associated_token_account,
         mint_authority,
         amount: 1,
+        multisig_signers: &[] as &[&AccountView],
     }
     .invoke_signed(&signers)?;
 
@@ -102,22 +95,19 @@ pub fn mint_to(program_id: &Address, accounts: &[AccountView]) -> ProgramResult 
         InstructionAccount::readonly(token_program.address()),
         InstructionAccount::readonly(system_program.address()),
     ];
-    let instruction = InstructionView {
-        program_id: &TOKEN_METADATA_PROGRAM_ID,
-        accounts: &edition_accounts,
-        data: &edition_data,
-    };
+    let instruction =
+        InstructionView { program_id: &TOKEN_METADATA_PROGRAM_ID, accounts: &edition_accounts, data: &edition_data };
     invoke_signed(
         &instruction,
         &[
-            edition_account,
-            mint_account,
-            mint_authority,
-            mint_authority,
-            payer,
-            metadata_account,
-            token_program,
-            system_program,
+            *edition_account,
+            *mint_account,
+            *mint_authority,
+            *mint_authority,
+            *payer,
+            *metadata_account,
+            *token_program,
+            *system_program,
         ],
         &signers,
     )?;

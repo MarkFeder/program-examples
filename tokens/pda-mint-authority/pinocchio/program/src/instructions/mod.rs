@@ -51,9 +51,7 @@ fn read_borsh_string<'a>(data: &'a [u8], offset: &mut usize) -> Result<&'a [u8],
     let len = u32::from_le_bytes(len_bytes) as usize;
     *offset += 4;
 
-    let bytes = data
-        .get(*offset..*offset + len)
-        .ok_or(ProgramError::InvalidInstructionData)?;
+    let bytes = data.get(*offset..*offset + len).ok_or(ProgramError::InvalidInstructionData)?;
     *offset += len;
     Ok(bytes)
 }
