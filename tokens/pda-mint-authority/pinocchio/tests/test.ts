@@ -3,19 +3,28 @@ import * as path from 'node:path';
 import {
     AccountRole,
     address,
+    addEncoderSizePrefix,
     appendTransactionMessageInstruction,
     createTransactionMessage,
     generateKeyPairSigner,
     getAddressEncoder,
     getProgramDerivedAddress,
+    getStructEncoder,
+    getU32Encoder,
+    getU8Encoder,
+    getUtf8Encoder,
     lamports,
     pipe,
     setTransactionMessageFeePayerSigner,
     signTransactionMessageWithSigners,
 } from '@solana/kit';
 import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system';
-import { ASSOCIATED_TOKEN_PROGRAM_ADDRESS, getTokenDecoder, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
-import * as borsh from 'borsh';
+import {
+    ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
+    findAssociatedTokenPda,
+    getTokenDecoder,
+    TOKEN_PROGRAM_ADDRESS,
+} from '@solana-program/token';
 import { assert } from 'chai';
 import { FailedTransactionMetadata, LiteSVM } from 'litesvm';
 
@@ -31,16 +40,16 @@ const INIT = 0;
 const CREATE = 1;
 const MINT = 2;
 
-// Borsh schema for the Create instruction data, matching the program's
-// `CreateTokenArgs` (and the native example's wire format).
-const CreateTokenArgsSchema: borsh.Schema = {
-    struct: {
-        instruction: 'u8',
-        nft_title: 'string',
-        nft_symbol: 'string',
-        nft_uri: 'string',
-    },
-};
+// Create instruction data layout, matching the program's `CreateTokenArgs` (and
+// the native example's wire format). Borsh strings are a u32-LE length prefix
+// followed by the UTF-8 bytes.
+const borshString = () => addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder());
+const createTokenArgsEncoder = getStructEncoder([
+    ['instruction', getU8Encoder()],
+    ['nftTitle', borshString()],
+    ['nftSymbol', borshString()],
+    ['nftUri', borshString()],
+]);
 
 // The compiled program artifacts live in ./fixtures: the pinocchio program is
 // built there by `build-and-test`, and token_metadata.so is dumped from mainnet
@@ -65,18 +74,6 @@ async function getMasterEditionAddress(mint: ReturnType<typeof address>) {
         seeds: ['metadata', addressEncoder.encode(TOKEN_METADATA_PROGRAM_ID), addressEncoder.encode(mint), 'edition'],
     });
     return edition;
-}
-
-async function getAssociatedTokenAddress(mint: ReturnType<typeof address>, owner: ReturnType<typeof address>) {
-    const [ata] = await getProgramDerivedAddress({
-        programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
-        seeds: [
-            addressEncoder.encode(owner),
-            addressEncoder.encode(TOKEN_PROGRAM_ADDRESS),
-            addressEncoder.encode(mint),
-        ],
-    });
-    return ata;
 }
 
 describe('PDA Mint Authority (Pinocchio)', () => {
@@ -148,15 +145,12 @@ describe('PDA Mint Authority (Pinocchio)', () => {
     it('Create an NFT!', async () => {
         const metadataAddress = await getMetadataAddress(mint.address);
 
-        const data = Buffer.from(
-            borsh.serialize(CreateTokenArgsSchema, {
-                instruction: CREATE,
-                nft_title: 'Homer NFT',
-                nft_symbol: 'HOMR',
-                nft_uri:
-                    'https://raw.githubusercontent.com/solana-developers/program-examples/new-examples/tokens/tokens/.assets/nft.json',
-            }),
-        );
+        const data = createTokenArgsEncoder.encode({
+            instruction: CREATE,
+            nftTitle: 'Homer NFT',
+            nftSymbol: 'HOMR',
+            nftUri: 'https://raw.githubusercontent.com/solana-developers/program-examples/new-examples/tokens/tokens/.assets/nft.json',
+        });
 
         await send({
             programAddress: programId,
@@ -185,7 +179,11 @@ describe('PDA Mint Authority (Pinocchio)', () => {
     it('Mint the NFT to your wallet!', async () => {
         const metadataAddress = await getMetadataAddress(mint.address);
         const editionAddress = await getMasterEditionAddress(mint.address);
-        const ata = await getAssociatedTokenAddress(mint.address, payer.address);
+        const [ata] = await findAssociatedTokenPda({
+            owner: payer.address,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
 
         await send({
             programAddress: programId,

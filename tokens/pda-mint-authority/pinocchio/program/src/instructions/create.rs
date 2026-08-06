@@ -48,9 +48,12 @@ pub fn create_token(program_id: &Address, accounts: &mut [AccountView], data: &[
     let args = CreateTokenArgs::parse(data)?;
 
     // Recover the PDA bump recorded by `init` and confirm the supplied account is
-    // the canonical mint-authority PDA.
+    // the mint-authority PDA. The canonical bump is already known, so derive the
+    // address directly with `create_program_address` rather than searching for it
+    // with `find_program_address`.
     let bump = MintAuthorityPda::deserialize(&mint_authority.try_borrow()?)?.bump;
-    let (pda, _) = Address::find_program_address(&[MintAuthorityPda::SEED_PREFIX], program_id);
+    let pda = Address::create_program_address(&[MintAuthorityPda::SEED_PREFIX, &[bump]], program_id)
+        .map_err(|_| ProgramError::InvalidSeeds)?;
     if mint_authority.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
