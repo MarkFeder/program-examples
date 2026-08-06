@@ -15,7 +15,12 @@ import {
 } from '@solana/kit';
 import { SYSVAR_INSTRUCTIONS_ADDRESS } from '@solana/sysvars';
 import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system';
-import { ASSOCIATED_TOKEN_PROGRAM_ADDRESS, getTokenDecoder, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
+import {
+    ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
+    findAssociatedTokenPda,
+    getTokenDecoder,
+    TOKEN_PROGRAM_ADDRESS,
+} from '@solana-program/token';
 import { assert } from 'chai';
 import { FailedTransactionMetadata, LiteSVM } from 'litesvm';
 
@@ -58,14 +63,7 @@ async function getMasterEditionAddress(mint: ReturnType<typeof address>) {
 }
 
 async function getAssociatedTokenAddress(mint: ReturnType<typeof address>, owner: ReturnType<typeof address>) {
-    const [ata] = await getProgramDerivedAddress({
-        programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
-        seeds: [
-            addressEncoder.encode(owner),
-            addressEncoder.encode(TOKEN_PROGRAM_ADDRESS),
-            addressEncoder.encode(mint),
-        ],
-    });
+    const [ata] = await findAssociatedTokenPda({ owner, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
     return ata;
 }
 
@@ -76,7 +74,6 @@ describe('NFT Operations (Pinocchio)', () => {
     let collectionMint: Awaited<ReturnType<typeof generateKeyPairSigner>>;
     let nftMint: Awaited<ReturnType<typeof generateKeyPairSigner>>;
     let mintAuthorityPda: ReturnType<typeof address>;
-    let mintAuthorityBump: number;
 
     before(async () => {
         svm = new LiteSVM();
@@ -93,14 +90,13 @@ describe('NFT Operations (Pinocchio)', () => {
         collectionMint = await generateKeyPairSigner();
         nftMint = await generateKeyPairSigner();
 
-        // The update/mint authority is a PDA of the program; its canonical bump is
-        // passed into every instruction and used by the program to sign CPIs.
-        const [pda, bump] = await getProgramDerivedAddress({
+        // The update/mint authority is a PDA of the program; the program derives
+        // its canonical bump on-chain to sign CPIs, so only the address is needed.
+        const [pda] = await getProgramDerivedAddress({
             programAddress: programId,
             seeds: ['authority'],
         });
         mintAuthorityPda = pda;
-        mintAuthorityBump = bump;
     });
 
     async function send<TInstruction extends Parameters<typeof appendTransactionMessageInstruction>[0]>(
@@ -138,7 +134,7 @@ describe('NFT Operations (Pinocchio)', () => {
                 { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // associated token program
                 { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
             ],
-            data: new Uint8Array([CREATE_COLLECTION, mintAuthorityBump]),
+            data: new Uint8Array([CREATE_COLLECTION]),
         });
 
         const mintAccount = svm.getAccount(collectionMint.address);
@@ -175,7 +171,7 @@ describe('NFT Operations (Pinocchio)', () => {
                 { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY }, // associated token program
                 { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
             ],
-            data: new Uint8Array([MINT_NFT, mintAuthorityBump]),
+            data: new Uint8Array([MINT_NFT]),
         });
 
         const destinationAccount = svm.getAccount(destination);
@@ -214,7 +210,7 @@ describe('NFT Operations (Pinocchio)', () => {
                 { address: SYSVAR_INSTRUCTIONS_ADDRESS, role: AccountRole.READONLY }, // instructions sysvar
                 { address: TOKEN_METADATA_PROGRAM_ID, role: AccountRole.READONLY }, // token metadata program
             ],
-            data: new Uint8Array([VERIFY_COLLECTION, mintAuthorityBump]),
+            data: new Uint8Array([VERIFY_COLLECTION]),
         });
 
         const metadataAccount = svm.getAccount(metadata);

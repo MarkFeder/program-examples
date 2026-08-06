@@ -6,7 +6,7 @@ use pinocchio::{
 };
 use pinocchio_log::log;
 
-use crate::instructions::{build_verify_collection_data, read_bump, AUTHORITY_SEED, TOKEN_METADATA_PROGRAM_ID};
+use crate::instructions::{build_verify_collection_data, AUTHORITY_SEED, TOKEN_METADATA_PROGRAM_ID};
 
 /// Verifies an NFT as a member of its collection via the Metaplex `Verify`
 /// instruction (`VerificationArgs::CollectionV1`), signed by the collection's
@@ -23,8 +23,8 @@ use crate::instructions::{build_verify_collection_data, read_bump, AUTHORITY_SEE
 ///   7. `[]`                 instructions sysvar
 ///   8. `[]`                 token metadata program
 ///
-/// Instruction data: `[authority_bump: u8]`.
-pub fn verify_collection(program_id: &Address, accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
+/// Instruction data: none.
+pub fn verify_collection(program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
     let [payer, mint_authority, metadata, collection_mint, collection_metadata, collection_master_edition, system_program, sysvar_instructions, token_metadata_program] =
         accounts
     else {
@@ -35,11 +35,11 @@ pub fn verify_collection(program_id: &Address, accounts: &mut [AccountView], arg
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Confirm the supplied account is the canonical mint-authority PDA.
-    let bump = read_bump(args)?;
-    // Derive the canonical PDA on-chain and reject a non-canonical bump.
-    let (pda, canonical_bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
-    if mint_authority.address() != &pda || bump != canonical_bump {
+    // Derive the canonical mint-authority PDA and bump on-chain (as the Anchor
+    // example does) instead of trusting a client-supplied bump, and confirm the
+    // supplied account matches it.
+    let (pda, bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
+    if mint_authority.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
 

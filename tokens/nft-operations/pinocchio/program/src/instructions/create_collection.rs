@@ -10,8 +10,7 @@ use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::{InitializeMint2, MintTo};
 
 use crate::instructions::{
-    build_metadata_data, create_master_edition_cpi, create_metadata_cpi, read_bump, AUTHORITY_SEED, MINT_SIZE,
-    TOKEN_DECIMALS,
+    build_metadata_data, create_master_edition_cpi, create_metadata_cpi, AUTHORITY_SEED, MINT_SIZE, TOKEN_DECIMALS,
 };
 
 /// Creates a collection NFT: a 0-decimal mint whose authority is the program's
@@ -30,8 +29,8 @@ use crate::instructions::{
 ///   8. `[]`                 associated token program
 ///   9. `[]`                 token metadata program
 ///
-/// Instruction data: `[authority_bump: u8]`.
-pub fn create_collection(program_id: &Address, accounts: &mut [AccountView], args: &[u8]) -> ProgramResult {
+/// Instruction data: none.
+pub fn create_collection(program_id: &Address, accounts: &mut [AccountView]) -> ProgramResult {
     let [user, mint, mint_authority, metadata, master_edition, destination, system_program, token_program, _associated_token_program, _token_metadata_program] =
         accounts
     else {
@@ -42,11 +41,11 @@ pub fn create_collection(program_id: &Address, accounts: &mut [AccountView], arg
         return Err(ProgramError::MissingRequiredSignature);
     }
 
-    // Confirm the supplied account is the canonical mint-authority PDA.
-    let bump = read_bump(args)?;
-    // Derive the canonical PDA on-chain and reject a non-canonical bump.
-    let (pda, canonical_bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
-    if mint_authority.address() != &pda || bump != canonical_bump {
+    // Derive the canonical mint-authority PDA and bump on-chain (as the Anchor
+    // example does) instead of trusting a client-supplied bump, and confirm the
+    // supplied account matches it.
+    let (pda, bump) = Address::find_program_address(&[AUTHORITY_SEED], program_id);
+    if mint_authority.address() != &pda {
         return Err(ProgramError::InvalidSeeds);
     }
 

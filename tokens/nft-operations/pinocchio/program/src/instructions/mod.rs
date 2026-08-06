@@ -2,7 +2,6 @@ use alloc::vec::Vec;
 
 use pinocchio::{
     cpi::{invoke_signed, Signer},
-    error::ProgramError,
     instruction::{InstructionAccount, InstructionView},
     AccountView, ProgramResult,
 };
@@ -39,11 +38,6 @@ const CREATE_MASTER_EDITION_V3: u8 = 17;
 const VERIFY: u8 = 52;
 /// `VerificationArgs::CollectionV1` variant index, the argument to `Verify`.
 const VERIFY_COLLECTION_V1: u8 = 1;
-
-/// Reads the `authority_bump` carried by every instruction's data.
-pub(crate) fn read_bump(args: &[u8]) -> Result<u8, ProgramError> {
-    args.first().copied().ok_or(ProgramError::InvalidInstructionData)
-}
 
 /// Serializes the data for a Metaplex `CreateMetadataAccountV3` instruction.
 ///

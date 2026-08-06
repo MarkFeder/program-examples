@@ -5,33 +5,32 @@ use crate::instructions::{create_collection, mint_nft, verify_collection};
 
 /// Dispatches an instruction based on its leading discriminator byte.
 ///
-/// Instruction data layout: `[discriminator: u8, authority_bump: u8]`
+/// Instruction data layout: `[discriminator: u8]`
 ///   - `0` -> CreateCollection  (mints a collection NFT)
 ///   - `1` -> MintNft           (mints an NFT that belongs to the collection)
 ///   - `2` -> VerifyCollection  (verifies the NFT as part of the collection)
 ///
-/// Every instruction carries the bump of the `[b"authority"]` mint-authority
-/// PDA so the program can sign the Metaplex CPIs with it (the Anchor example
-/// derives this bump on-chain instead).
+/// The `[b"authority"]` mint-authority PDA and its bump are derived on-chain
+/// (as the Anchor example does), so no bump is carried in the instruction data.
 pub fn process_instruction(
     program_id: &Address,
     accounts: &mut [AccountView],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let (discriminator, args) = instruction_data.split_first().ok_or(ProgramError::InvalidInstructionData)?;
+    let discriminator = *instruction_data.first().ok_or(ProgramError::InvalidInstructionData)?;
 
-    match *discriminator {
+    match discriminator {
         0 => {
             log!("Instruction: CreateCollection");
-            create_collection(program_id, accounts, args)
+            create_collection(program_id, accounts)
         }
         1 => {
             log!("Instruction: MintNft");
-            mint_nft(program_id, accounts, args)
+            mint_nft(program_id, accounts)
         }
         2 => {
             log!("Instruction: VerifyCollection");
-            verify_collection(program_id, accounts, args)
+            verify_collection(program_id, accounts)
         }
         _ => Err(ProgramError::InvalidInstructionData),
     }
