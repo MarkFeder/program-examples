@@ -162,7 +162,10 @@ describe('Token-2022 Immutable Owner (Pinocchio)', () => {
                     m,
                 ),
         );
-        svm.sendTransaction(await signTransactionMessageWithSigners(mintTx));
+        const mintResult = svm.sendTransaction(await signTransactionMessageWithSigners(mintTx));
+        if (mintResult instanceof FailedTransactionMetadata) {
+            throw new Error(`Mint setup failed: ${mintResult.err()}`);
+        }
 
         const tokenAccount = await generateKeyPairSigner();
         const owner = await generateKeyPairSigner();
@@ -183,7 +186,10 @@ describe('Token-2022 Immutable Owner (Pinocchio)', () => {
             m => svm.setTransactionMessageLifetimeUsingLatestBlockhash(m),
             m => appendTransactionMessageInstruction(createIx, m),
         );
-        svm.sendTransaction(await signTransactionMessageWithSigners(createTx));
+        const createResult = svm.sendTransaction(await signTransactionMessageWithSigners(createTx));
+        if (createResult instanceof FailedTransactionMetadata) {
+            throw new Error(`Account setup failed: ${createResult.err()}`);
+        }
 
         // Try to reassign the account owner — Token-2022 must reject this because
         // the account carries the ImmutableOwner extension.
