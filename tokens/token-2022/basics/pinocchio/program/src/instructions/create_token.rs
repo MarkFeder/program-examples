@@ -16,6 +16,9 @@ use crate::instructions::{MINT_DECIMALS, MINT_SIZE, TOKEN_2022_PROGRAM_ID, TOKEN
 /// instruction enum).
 const INITIALIZE_MINT_2: u8 = 20;
 
+/// Maximum length (in bytes) of a single PDA seed.
+const MAX_SEED_LEN: usize = 32;
+
 /// Creates a Token-2022 mint (6 decimals, no extensions) at the PDA
 /// `[b"token-2022-token", signer, token_name]`, with the signer as mint
 /// authority and no freeze authority.
@@ -31,6 +34,13 @@ pub fn create_token(program_id: &Address, accounts: &mut [AccountView], token_na
     let [signer, mint_account, _system_program, _token_program] = accounts else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
+
+    // `token_name` is caller-controlled and used directly as a PDA seed. A PDA
+    // seed may be at most 32 bytes, so reject oversized names up front with a
+    // clear error instead of letting address derivation fail opaquely.
+    if token_name.len() > MAX_SEED_LEN {
+        return Err(ProgramError::InvalidInstructionData);
+    }
 
     // Derive the mint PDA and confirm the supplied account matches it.
     let (mint_pda, bump) =

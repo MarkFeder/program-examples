@@ -197,4 +197,34 @@ describe('Token-2022 Basics (Pinocchio)', () => {
         console.log('Mint:', mintPda);
         console.log('Decimals:', DECIMALS);
     });
+
+    it('Rejects a token name longer than the 32-byte PDA seed limit', async () => {
+        const payer = await generateKeyPairSigner();
+        svm.airdrop(payer.address, lamports(1_000_000_000n));
+
+        // 33 bytes — one over the per-seed maximum. The client can't even derive
+        // the PDA for such a seed, so pass a placeholder mint account: the
+        // program's length guard rejects the instruction before it uses it.
+        const longName = 'x'.repeat(33);
+        const placeholderMint = (await generateKeyPairSigner()).address;
+
+        const ix = {
+            programAddress: programId,
+            data: new Uint8Array([CREATE_TOKEN, ...encoder.encode(longName)]),
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: placeholderMint, role: AccountRole.WRITABLE },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+        };
+        const tx = pipe(
+            createTransactionMessage({ version: 0 }),
+            m => setTransactionMessageFeePayerSigner(payer, m),
+            m => svm.setTransactionMessageLifetimeUsingLatestBlockhash(m),
+            m => appendTransactionMessageInstruction(ix, m),
+        );
+        const result = svm.sendTransaction(await signTransactionMessageWithSigners(tx));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the oversized token name to be rejected');
+    });
 });
