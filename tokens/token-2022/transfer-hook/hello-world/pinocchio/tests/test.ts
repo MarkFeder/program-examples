@@ -283,4 +283,52 @@ describe('Token-2022 Transfer Hook — Hello World (Pinocchio)', () => {
         assert.include(logs, 'custom program error: 0x0', 'rejected with IsNotCurrentlyTransferring');
         assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
     });
+
+    it('Rejects a forged source account claiming to be transferring', async () => {
+        // The `transferring` flag is only trustworthy because Token-2022 wrote
+        // it. Hand-build an account that carries the right bytes at the right
+        // offsets — a TransferHookAccount TLV (type 15) with transferring = 1,
+        // naming the real mint — but is owned by someone else.
+        const forged = new Uint8Array(171);
+        forged.set(addressEncoder.encode(mint.address), 0); // mint
+        forged.set(addressEncoder.encode(payer.address), 32); // owner
+        forged[165] = 2; // account type: Account
+        forged[166] = 15; // TLV type: TransferHookAccount (u16 LE)
+        forged[167] = 0;
+        forged[168] = 1; // TLV length: 1 (u16 LE)
+        forged[169] = 0;
+        forged[170] = 1; // transferring = true
+
+        const attacker = await generateKeyPairSigner();
+        const forgedSource = (await generateKeyPairSigner()).address;
+        svm.setAccount({
+            address: forgedSource,
+            data: forged,
+            executable: false,
+            lamports: svm.minimumBalanceForRentExemption(BigInt(forged.length)),
+            programAddress: attacker.address, // not Token-2022
+            space: BigInt(forged.length),
+        });
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: forgedSource, role: AccountRole.READONLY },
+                { address: mint.address, role: AccountRole.READONLY },
+                { address: destinationTokenAccount, role: AccountRole.READONLY },
+                { address: payer.address, role: AccountRole.READONLY },
+                { address: extraAccountMetaList, role: AccountRole.READONLY },
+            ],
+            data: concatBytes(EXECUTE_DISCRIMINATOR, u64(TRANSFER_AMOUNT)),
+        };
+
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the forged source account to be rejected');
+
+        // Rejected as an invalid source account (custom error 3) — the forged
+        // transferring flag must never reach the hook body.
+        const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
+        assert.include(logs, 'custom program error: 0x3', 'rejected with InvalidSourceAccount');
+        assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
+    });
 });

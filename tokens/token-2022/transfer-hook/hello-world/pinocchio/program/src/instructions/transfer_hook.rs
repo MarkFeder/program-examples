@@ -3,9 +3,12 @@ use pinocchio_log::log;
 
 use crate::{
     error::TransferHookError,
-    instructions::EXTRA_ACCOUNT_METAS_SEED,
+    instructions::{EXTRA_ACCOUNT_METAS_SEED, TOKEN_2022_PROGRAM_ID},
     token2022::{get_extension_data, TRANSFER_HOOK_ACCOUNT},
 };
+
+/// A token account stores its mint in the first 32 bytes.
+const TOKEN_ACCOUNT_MINT_RANGE: core::ops::Range<usize> = 0..32;
 
 /// The `Execute` instruction of the transfer-hook interface: Token-2022 CPIs
 /// this during every transfer of a mint that names this program as its hook.
@@ -35,20 +38,39 @@ pub fn transfer_hook(program_id: &Address, accounts: &mut [AccountView], _data: 
         return Err(ProgramError::InvalidSeeds);
     }
 
-    check_is_transferring(source_token)?;
+    check_is_transferring(source_token, mint)?;
 
     log!("Hello Transfer Hook!");
     Ok(())
 }
 
-/// Fails unless the source account is mid-transfer.
+/// Fails unless the source account is a genuine Token-2022 account for `mint`
+/// that is mid-transfer.
 ///
 /// Token-2022 raises the `TransferHookAccount` extension's `transferring` flag
-/// only for the duration of the transfer it is executing. Checking it is what
-/// stops the hook from being invoked directly, outside any transfer — a real
-/// hook that grants or records something must not be callable on its own.
-fn check_is_transferring(source_token: &AccountView) -> ProgramResult {
+/// only for the duration of the transfer it is executing, so the flag is what
+/// stops the hook being invoked directly, outside any transfer.
+///
+/// The flag is only worth anything if Token-2022 is what wrote it, hence the
+/// two checks before it. Anyone can call `Execute` directly and hand over an
+/// account they built themselves, and bytes at the right offsets would
+/// otherwise read as `transferring = 1`. Requiring Token-2022 ownership *and*
+/// that the account names this mint pins it to an account only Token-2022 can
+/// have produced — the Anchor version of this example gets the same guarantee
+/// from its `InterfaceAccount<TokenAccount>` and `token::mint = mint`
+/// constraints.
+fn check_is_transferring(source_token: &AccountView, mint: &AccountView) -> ProgramResult {
+    if !source_token.owned_by(&TOKEN_2022_PROGRAM_ID) {
+        return Err(TransferHookError::InvalidSourceAccount.into());
+    }
+
     let account_data = source_token.try_borrow()?;
+
+    let account_mint = account_data.get(TOKEN_ACCOUNT_MINT_RANGE).ok_or(TransferHookError::InvalidSourceAccount)?;
+    if account_mint != mint.address().as_ref() {
+        return Err(TransferHookError::InvalidSourceAccount.into());
+    }
+
     let extension = get_extension_data(&account_data, TRANSFER_HOOK_ACCOUNT)
         .ok_or(TransferHookError::IsNotCurrentlyTransferring)?;
 

@@ -9,6 +9,8 @@ pub enum TransferHookError {
     MissingTransferHookExtension = 1,
     /// The `TransferHook` extension does not name the expected authority and program.
     UnexpectedTransferHookConfig = 2,
+    /// The source account is not a Token-2022 account belonging to the given mint.
+    InvalidSourceAccount = 3,
 }
 
 impl From<TransferHookError> for ProgramError {
