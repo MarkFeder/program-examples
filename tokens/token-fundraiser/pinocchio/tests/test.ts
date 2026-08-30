@@ -176,7 +176,6 @@ describe('Token Fundraiser (Pinocchio)', () => {
         contributorAccount: Address,
         contributorAta: Address,
         vault: Address,
-        bump: number,
         amount: bigint,
     ) {
         return {
@@ -191,7 +190,8 @@ describe('Token Fundraiser (Pinocchio)', () => {
                 { address: TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
                 { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
             ],
-            data: concatBytes(Uint8Array.of(1), u64(amount), Uint8Array.of(bump)),
+            // The contributor PDA bump is derived on-chain, not supplied here.
+            data: concatBytes(Uint8Array.of(1), u64(amount)),
         };
     }
 
@@ -261,7 +261,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const contributor = await generateKeyPairSigner();
         svm.airdrop(contributor.address, lamports(1_000_000_000n));
         const contributorAta = await fundAta(maker, maker, contributor.address, mint.address, 10n);
-        const [contributorAccount, cbump] = await contributorPda(fundraiser, contributor.address);
+        const [contributorAccount] = await contributorPda(fundraiser, contributor.address);
 
         send(
             await tx(contributor, [
@@ -272,7 +272,6 @@ describe('Token Fundraiser (Pinocchio)', () => {
                     contributorAccount,
                     contributorAta,
                     vault,
-                    cbump,
                     10n,
                 ),
             ]),
@@ -323,7 +322,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
             const contributor = await generateKeyPairSigner();
             svm.airdrop(contributor.address, lamports(1_000_000_000n));
             const contributorAta = await fundAta(maker, maker, contributor.address, mint.address, 10n);
-            const [contributorAccount, cbump] = await contributorPda(fundraiser, contributor.address);
+            const [contributorAccount] = await contributorPda(fundraiser, contributor.address);
             send(
                 await tx(contributor, [
                     contributeIx(
@@ -333,7 +332,6 @@ describe('Token Fundraiser (Pinocchio)', () => {
                         contributorAccount,
                         contributorAta,
                         vault,
-                        cbump,
                         10n,
                     ),
                 ]),
@@ -373,10 +371,10 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const victim = await generateKeyPairSigner();
         svm.airdrop(victim.address, lamports(1_000_000_000n));
         const victimAta = await fundAta(maker, maker, victim.address, mint.address, 1n);
-        const [victimAccount, victimBump] = await contributorPda(fundraiser, victim.address);
+        const [victimAccount] = await contributorPda(fundraiser, victim.address);
         send(
             await tx(victim, [
-                contributeIx(victim, mint.address, fundraiser, victimAccount, victimAta, vault, victimBump, 1n),
+                contributeIx(victim, mint.address, fundraiser, victimAccount, victimAta, vault, 1n),
             ]),
             'victim contribute',
         );
@@ -387,13 +385,47 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const attackerAta = await fundAta(maker, maker, attacker.address, mint.address, 1n);
         sendExpectingFailure(
             await tx(attacker, [
-                contributeIx(attacker, mint.address, fundraiser, victimAccount, attackerAta, vault, victimBump, 1n),
+                contributeIx(attacker, mint.address, fundraiser, victimAccount, attackerAta, vault, 1n),
             ]),
             'contribution into a substituted record',
         );
 
         assert.equal(tokenAmount(attackerAta), 1n, 'attacker kept their tokens');
         assert.equal(tokenAmount(vault), 1n, 'vault only holds the recorded contribution');
+    });
+
+    it('Rejects a contributor record that is not the canonical PDA', async () => {
+        const maker = await generateKeyPairSigner();
+        svm.airdrop(maker.address, lamports(1_000_000_000n));
+        const mint = await createMint(maker, 0, maker.address);
+
+        const [fundraiser, bump] = await fundraiserPda(maker.address);
+        const [vault] = await findAssociatedTokenPda({
+            owner: fundraiser,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+        send(await tx(maker, [initializeIx(maker, mint.address, fundraiser, vault, bump, 100n, 30)]), 'initialize');
+
+        // The record address is derived on-chain, so a contributor cannot open a
+        // second record for themselves at any other address — including one
+        // derived from a non-canonical bump. A record that is not the canonical
+        // PDA is refused before it can be created, which also keeps every record
+        // reachable by `refund` (which only ever derives the canonical address).
+        const contributor = await generateKeyPairSigner();
+        svm.airdrop(contributor.address, lamports(1_000_000_000n));
+        const contributorAta = await fundAta(maker, maker, contributor.address, mint.address, 5n);
+        const notTheCanonicalPda = (await generateKeyPairSigner()).address;
+
+        sendExpectingFailure(
+            await tx(contributor, [
+                contributeIx(contributor, mint.address, fundraiser, notTheCanonicalPda, contributorAta, vault, 5n),
+            ]),
+            'contribution into a non-canonical record',
+        );
+
+        assert.equal(tokenAmount(contributorAta), 5n, 'contributor kept their tokens');
+        assert.isNotOk(svm.getAccount(notTheCanonicalPda)?.exists, 'no second record was created');
     });
 
     it('Ignores unrecorded direct transfers into the vault', async () => {
@@ -414,7 +446,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const contributor = await generateKeyPairSigner();
         svm.airdrop(contributor.address, lamports(1_000_000_000n));
         const contributorAta = await fundAta(maker, maker, contributor.address, mint.address, 10n);
-        const [contributorAccount, cbump] = await contributorPda(fundraiser, contributor.address);
+        const [contributorAccount] = await contributorPda(fundraiser, contributor.address);
         send(
             await tx(contributor, [
                 contributeIx(
@@ -424,7 +456,6 @@ describe('Token Fundraiser (Pinocchio)', () => {
                     contributorAccount,
                     contributorAta,
                     vault,
-                    cbump,
                     10n,
                 ),
             ]),

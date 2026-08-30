@@ -27,7 +27,7 @@ use crate::{
 ///   6. `[]`                 token program
 ///   7. `[]`                 system program
 ///
-/// Instruction data: `[amount: u64 (LE), contributor_bump: u8]`
+/// Instruction data: `[amount: u64 (LE)]`
 pub fn contribute(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
     let [contributor, mint_to_raise, fundraiser, contributor_account, contributor_ata, vault, _token_program, _system_program] =
         accounts
@@ -40,7 +40,6 @@ pub fn contribute(program_id: &Address, accounts: &mut [AccountView], data: &[u8
     }
 
     let amount = read_u64(data, 0)?;
-    let contributor_bump = *data.get(8).ok_or(ProgramError::InvalidInstructionData)?;
 
     let mut state = Fundraiser::deserialize(&fundraiser.try_borrow()?)?;
 
@@ -76,6 +75,16 @@ pub fn contribute(program_id: &Address, accounts: &mut [AccountView], data: &[u8
 
     // Bind the contributor record to this signer before trusting it, whether it
     // already exists or is about to be created.
+    //
+    // The bump is derived here rather than taken from the caller: several bumps
+    // can yield a valid address for the same seeds, so accepting one would let a
+    // contributor open a second, non-canonical record and be metered against the
+    // cap separately on each. `refund` only ever derives the canonical address,
+    // so those extra records would also be unrefundable.
+    let (contributor_pda, contributor_bump) = Address::find_program_address(
+        &[Contributor::SEED_PREFIX, fundraiser.address().as_ref(), contributor.address().as_ref()],
+        program_id,
+    );
     let bump_bytes = [contributor_bump];
     let seeds = [
         Seed::from(Contributor::SEED_PREFIX),
@@ -83,11 +92,6 @@ pub fn contribute(program_id: &Address, accounts: &mut [AccountView], data: &[u8
         Seed::from(contributor.address().as_ref()),
         Seed::from(&bump_bytes),
     ];
-    let contributor_pda = Address::create_program_address(
-        &[Contributor::SEED_PREFIX, fundraiser.address().as_ref(), contributor.address().as_ref(), &bump_bytes],
-        program_id,
-    )
-    .map_err(|_| ProgramError::InvalidSeeds)?;
     if contributor_account.address() != &contributor_pda {
         return Err(ProgramError::InvalidSeeds);
     }
