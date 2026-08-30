@@ -265,15 +265,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
 
         send(
             await tx(contributor, [
-                contributeIx(
-                    contributor,
-                    mint.address,
-                    fundraiser,
-                    contributorAccount,
-                    contributorAta,
-                    vault,
-                    10n,
-                ),
+                contributeIx(contributor, mint.address, fundraiser, contributorAccount, contributorAta, vault, 10n),
             ]),
             'contribute',
         );
@@ -325,15 +317,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
             const [contributorAccount] = await contributorPda(fundraiser, contributor.address);
             send(
                 await tx(contributor, [
-                    contributeIx(
-                        contributor,
-                        mint.address,
-                        fundraiser,
-                        contributorAccount,
-                        contributorAta,
-                        vault,
-                        10n,
-                    ),
+                    contributeIx(contributor, mint.address, fundraiser, contributorAccount, contributorAta, vault, 10n),
                 ]),
                 `contribute ${i}`,
             );
@@ -373,9 +357,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const victimAta = await fundAta(maker, maker, victim.address, mint.address, 1n);
         const [victimAccount] = await contributorPda(fundraiser, victim.address);
         send(
-            await tx(victim, [
-                contributeIx(victim, mint.address, fundraiser, victimAccount, victimAta, vault, 1n),
-            ]),
+            await tx(victim, [contributeIx(victim, mint.address, fundraiser, victimAccount, victimAta, vault, 1n)]),
             'victim contribute',
         );
 
@@ -449,15 +431,7 @@ describe('Token Fundraiser (Pinocchio)', () => {
         const [contributorAccount] = await contributorPda(fundraiser, contributor.address);
         send(
             await tx(contributor, [
-                contributeIx(
-                    contributor,
-                    mint.address,
-                    fundraiser,
-                    contributorAccount,
-                    contributorAta,
-                    vault,
-                    10n,
-                ),
+                contributeIx(contributor, mint.address, fundraiser, contributorAccount, contributorAta, vault, 10n),
             ]),
             'contribute',
         );
