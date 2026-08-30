@@ -305,7 +305,7 @@ describe('Token-2022 Transfer Hook — Hello World (Pinocchio)', () => {
             address: forgedSource,
             data: forged,
             executable: false,
-            lamports: svm.minimumBalanceForRentExemption(BigInt(forged.length)),
+            lamports: lamports(svm.minimumBalanceForRentExemption(BigInt(forged.length))),
             programAddress: attacker.address, // not Token-2022
             space: BigInt(forged.length),
         });
