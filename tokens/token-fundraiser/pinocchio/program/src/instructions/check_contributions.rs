@@ -58,9 +58,11 @@ pub fn check_contributions(program_id: &Address, accounts: &mut [AccountView], _
         return Err(ProgramError::InvalidAccountData);
     }
 
-    // The target must have been reached.
+    // The target must have been reached by recorded contributions. The vault
+    // balance itself is not the gate: anyone can transfer into a standard ATA,
+    // and such unrecorded deposits must not release the fundraiser.
     let vault_amount = TokenAccount::from_account_view(vault)?.amount();
-    if vault_amount < state.amount_to_raise {
+    if state.current_amount < state.amount_to_raise {
         return Err(FundraiserError::TargetNotMet.into());
     }
 

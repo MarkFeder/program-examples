@@ -74,26 +74,28 @@ pub fn contribute(program_id: &Address, accounts: &mut [AccountView], data: &[u8
         return Err(FundraiserError::FundraiserEnded.into());
     }
 
+    // Bind the contributor record to this signer before trusting it, whether it
+    // already exists or is about to be created.
+    let bump_bytes = [contributor_bump];
+    let seeds = [
+        Seed::from(Contributor::SEED_PREFIX),
+        Seed::from(fundraiser.address().as_ref()),
+        Seed::from(contributor.address().as_ref()),
+        Seed::from(&bump_bytes),
+    ];
+    let contributor_pda = Address::create_program_address(
+        &[Contributor::SEED_PREFIX, fundraiser.address().as_ref(), contributor.address().as_ref(), &bump_bytes],
+        program_id,
+    )
+    .map_err(|_| ProgramError::InvalidSeeds)?;
+    if contributor_account.address() != &contributor_pda {
+        return Err(ProgramError::InvalidSeeds);
+    }
+
     // Create the per-contributor record on first contribution; otherwise load it.
     let already_contributed = if contributor_account.owner() == program_id {
         Contributor::deserialize(&contributor_account.try_borrow()?)?.amount
     } else {
-        let bump_bytes = [contributor_bump];
-        let seeds = [
-            Seed::from(Contributor::SEED_PREFIX),
-            Seed::from(fundraiser.address().as_ref()),
-            Seed::from(contributor.address().as_ref()),
-            Seed::from(&bump_bytes),
-        ];
-        let contributor_pda = Address::create_program_address(
-            &[Contributor::SEED_PREFIX, fundraiser.address().as_ref(), contributor.address().as_ref(), &bump_bytes],
-            program_id,
-        )
-        .map_err(|_| ProgramError::InvalidSeeds)?;
-        if contributor_account.address() != &contributor_pda {
-            return Err(ProgramError::InvalidSeeds);
-        }
-
         log!("Creating contributor account");
         let lamports = Rent::get()?.try_minimum_balance(Contributor::LEN)?;
         CreateAccount {

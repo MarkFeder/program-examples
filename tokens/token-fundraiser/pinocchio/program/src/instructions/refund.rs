@@ -4,7 +4,7 @@ use pinocchio::{
     AccountView, Address, ProgramResult,
 };
 use pinocchio_log::log;
-use pinocchio_token::{instructions::Transfer, state::Account as TokenAccount};
+use pinocchio_token::instructions::Transfer;
 
 use crate::{
     error::FundraiserError,
@@ -62,8 +62,9 @@ pub fn refund(program_id: &Address, accounts: &mut [AccountView], _data: &[u8]) 
     if days_elapsed(state.time_started)? < state.duration as i64 {
         return Err(FundraiserError::FundraiserNotEnded.into());
     }
-    let vault_amount = TokenAccount::from_account_view(vault)?.amount();
-    if vault_amount >= state.amount_to_raise {
+    // Eligibility reads the recorded total, not the vault balance, so an
+    // unrecorded direct transfer into the vault cannot block legitimate refunds.
+    if state.current_amount >= state.amount_to_raise {
         return Err(FundraiserError::TargetMet.into());
     }
 

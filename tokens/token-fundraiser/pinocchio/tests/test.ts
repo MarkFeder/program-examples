@@ -22,6 +22,7 @@ import {
     getInitializeMint2Instruction,
     getMintToInstruction,
     getTokenDecoder,
+    getTransferInstruction,
     TOKEN_PROGRAM_ADDRESS,
 } from '@solana-program/token';
 import { assert } from 'chai';
@@ -69,6 +70,12 @@ describe('Token Fundraiser (Pinocchio)', () => {
         if (result instanceof FailedTransactionMetadata) {
             throw new Error(`${label} failed: ${result.err()}`);
         }
+    }
+
+    // Asserts a transaction is rejected on-chain rather than succeeding.
+    function sendExpectingFailure(signedTx: Parameters<typeof svm.sendTransaction>[0], label: string) {
+        const result = svm.sendTransaction(signedTx);
+        assert.instanceOf(result, FailedTransactionMetadata, `${label} should have been rejected`);
     }
 
     async function tx(payer: KeyPairSigner, instructions: Parameters<typeof appendTransactionMessageInstruction>[0][]) {
@@ -345,5 +352,122 @@ describe('Token Fundraiser (Pinocchio)', () => {
 
         assert.equal(tokenAmount(makerAta), 100n, 'maker received the raised funds');
         assert.isNotOk(svm.getAccount(fundraiser)?.exists, 'fundraiser account was closed');
+    });
+
+    it("Rejects a contribution credited to another contributor's record", async () => {
+        const maker = await generateKeyPairSigner();
+        svm.airdrop(maker.address, lamports(1_000_000_000n));
+        const mint = await createMint(maker, 0, maker.address);
+
+        const [fundraiser, bump] = await fundraiserPda(maker.address);
+        const [vault] = await findAssociatedTokenPda({
+            owner: fundraiser,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+        send(await tx(maker, [initializeIx(maker, mint.address, fundraiser, vault, bump, 100n, 30)]), 'initialize');
+
+        // Victim contributes first, which creates their program-owned record.
+        // Amounts stay well under the 10% cap so that the substituted-record
+        // rejection cannot be attributed to the per-contributor limit.
+        const victim = await generateKeyPairSigner();
+        svm.airdrop(victim.address, lamports(1_000_000_000n));
+        const victimAta = await fundAta(maker, maker, victim.address, mint.address, 1n);
+        const [victimAccount, victimBump] = await contributorPda(fundraiser, victim.address);
+        send(
+            await tx(victim, [
+                contributeIx(victim, mint.address, fundraiser, victimAccount, victimAta, vault, victimBump, 1n),
+            ]),
+            'victim contribute',
+        );
+
+        // The attacker signs their own transfer but points at the victim's record.
+        const attacker = await generateKeyPairSigner();
+        svm.airdrop(attacker.address, lamports(1_000_000_000n));
+        const attackerAta = await fundAta(maker, maker, attacker.address, mint.address, 1n);
+        sendExpectingFailure(
+            await tx(attacker, [
+                contributeIx(attacker, mint.address, fundraiser, victimAccount, attackerAta, vault, victimBump, 1n),
+            ]),
+            'contribution into a substituted record',
+        );
+
+        assert.equal(tokenAmount(attackerAta), 1n, 'attacker kept their tokens');
+        assert.equal(tokenAmount(vault), 1n, 'vault only holds the recorded contribution');
+    });
+
+    it('Ignores unrecorded direct transfers into the vault', async () => {
+        const maker = await generateKeyPairSigner();
+        svm.airdrop(maker.address, lamports(1_000_000_000n));
+        const mint = await createMint(maker, 0, maker.address);
+
+        const [fundraiser, bump] = await fundraiserPda(maker.address);
+        const [vault] = await findAssociatedTokenPda({
+            owner: fundraiser,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+
+        // Goal of 100 over 1 day; a single contributor gives the 10% max (10).
+        send(await tx(maker, [initializeIx(maker, mint.address, fundraiser, vault, bump, 100n, 1)]), 'initialize');
+
+        const contributor = await generateKeyPairSigner();
+        svm.airdrop(contributor.address, lamports(1_000_000_000n));
+        const contributorAta = await fundAta(maker, maker, contributor.address, mint.address, 10n);
+        const [contributorAccount, cbump] = await contributorPda(fundraiser, contributor.address);
+        send(
+            await tx(contributor, [
+                contributeIx(
+                    contributor,
+                    mint.address,
+                    fundraiser,
+                    contributorAccount,
+                    contributorAta,
+                    vault,
+                    cbump,
+                    10n,
+                ),
+            ]),
+            'contribute',
+        );
+
+        // Anyone can transfer straight into the vault's standard ATA. That must
+        // neither release the fundraiser nor lock the contributor out of a refund.
+        const outsiderAta = await fundAta(maker, maker, maker.address, mint.address, 90n);
+        send(
+            await tx(maker, [
+                getTransferInstruction({ source: outsiderAta, destination: vault, authority: maker, amount: 90n }),
+            ]),
+            'direct vault transfer',
+        );
+        assert.equal(tokenAmount(vault), 100n, 'vault balance now looks like the target was met');
+
+        const [makerAta] = await findAssociatedTokenPda({
+            owner: maker.address,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+        sendExpectingFailure(
+            await tx(maker, [checkIx(maker, mint.address, fundraiser, vault, makerAta)]),
+            'release on an unrecorded deposit',
+        );
+
+        // The contributor is still refundable once the fundraiser ends.
+        warpDays(2);
+        send(
+            await tx(contributor, [
+                refundIx(
+                    contributor,
+                    maker.address,
+                    mint.address,
+                    fundraiser,
+                    contributorAccount,
+                    contributorAta,
+                    vault,
+                ),
+            ]),
+            'refund',
+        );
+        assert.equal(tokenAmount(contributorAta), 10n, 'contributor got their tokens back');
     });
 });
