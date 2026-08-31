@@ -224,6 +224,21 @@ describe('Token-2022 Transfer Hook — Counter (Pinocchio)', () => {
     });
 
     it('Creates the ExtraAccountMetaList account', async () => {
+        // Both PDAs below have publicly derivable addresses, and `CreateAccount`
+        // refuses to create over an account that already holds lamports — so a
+        // stray lamport on either would otherwise block setup for this mint
+        // permanently. Drop one on each first.
+        for (const address of [extraAccountMetaList, counter]) {
+            svm.setAccount({
+                address,
+                data: new Uint8Array(0),
+                executable: false,
+                lamports: lamports(1n),
+                programAddress: SYSTEM_PROGRAM_ADDRESS,
+                space: 0n,
+            });
+        }
+
         const ix = {
             programAddress: programId,
             accounts: [
