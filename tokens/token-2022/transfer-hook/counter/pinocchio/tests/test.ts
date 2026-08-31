@@ -361,6 +361,54 @@ describe('Token-2022 Transfer Hook — Counter (Pinocchio)', () => {
         assert.equal(counterValue(), 2n, 'the counter advanced to two');
     });
 
+    it('Configures a second mint against the existing counter', async () => {
+        // The counter is global, not per-mint, so setting up a second mint must
+        // reuse it. Creating it again would fail and roll the whole setup back,
+        // leaving every mint after the first unable to use this hook.
+        const secondMint = await generateKeyPairSigner();
+        const initIx = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: secondMint.address, role: AccountRole.WRITABLE_SIGNER, signer: secondMint },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.of(INITIALIZE_DISCRIMINATOR, DECIMALS),
+        };
+        send(await tx([initIx]), 'initialize second mint');
+
+        const [secondMetaList] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['extra-account-metas', addressEncoder.encode(secondMint.address)],
+        });
+        const countBefore = counterValue();
+
+        const metasIx = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: secondMetaList, role: AccountRole.WRITABLE },
+                { address: secondMint.address, role: AccountRole.READONLY },
+                { address: counter, role: AccountRole.WRITABLE },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: INITIALIZE_EXTRA_ACCOUNT_META_LIST_DISCRIMINATOR,
+        };
+        send(await tx([metasIx]), 'initialize second extra account meta list');
+
+        const account = svm.getAccount(secondMetaList);
+        if (!account?.exists) throw new Error('second extra account meta list not found');
+        assert.deepEqual(
+            Array.from(account.data),
+            Array.from(EXPECTED_EXTRA_ACCOUNT_METAS),
+            'the second mint got its own list',
+        );
+        assert.equal(counterValue(), countBefore, 'the shared counter kept its value');
+    });
+
     it('Rejects calling the hook outside a transfer', async () => {
         // Same accounts Token-2022 would pass, but invoked directly. The source
         // account's `transferring` flag is only set mid-transfer, so this fails.

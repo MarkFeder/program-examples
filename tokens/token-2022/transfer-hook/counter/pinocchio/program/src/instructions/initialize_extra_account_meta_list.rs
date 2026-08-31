@@ -7,7 +7,10 @@ use pinocchio::{
 use pinocchio_log::log;
 use pinocchio_system::instructions::CreateAccount;
 
-use crate::instructions::{COUNTER_SEED, COUNTER_SIZE, EXTRA_ACCOUNT_METAS_SEED};
+use crate::{
+    error::TransferHookError,
+    instructions::{COUNTER_SEED, COUNTER_SIZE, EXTRA_ACCOUNT_METAS_SEED},
+};
 
 /// A serialized `ExtraAccountMetaList` holding this example's one extra
 /// account: the counter PDA.
@@ -108,18 +111,26 @@ pub fn initialize_extra_account_meta_list(program_id: &Address, accounts: &mut [
         return Err(ProgramError::InvalidSeeds);
     }
 
-    let counter_bump_bytes = [counter_bump];
-    let counter_seeds = [Seed::from(COUNTER_SEED), Seed::from(&counter_bump_bytes)];
+    // Because that counter is global rather than per-mint, setting up a second
+    // mint finds it already there. Creating it again would fail and take the
+    // whole instruction — including the new mint's list — down with it, so the
+    // existing account is reused instead.
+    if counter.is_data_empty() {
+        let counter_bump_bytes = [counter_bump];
+        let counter_seeds = [Seed::from(COUNTER_SEED), Seed::from(&counter_bump_bytes)];
 
-    log!("Creating counter");
-    CreateAccount {
-        from: payer,
-        to: counter,
-        lamports: Rent::get()?.try_minimum_balance(COUNTER_SIZE)?,
-        space: COUNTER_SIZE as u64,
-        owner: program_id,
+        log!("Creating counter");
+        CreateAccount {
+            from: payer,
+            to: counter,
+            lamports: Rent::get()?.try_minimum_balance(COUNTER_SIZE)?,
+            space: COUNTER_SIZE as u64,
+            owner: program_id,
+        }
+        .invoke_signed(&[Signer::from(&counter_seeds)])?;
+    } else if !counter.owned_by(program_id) || counter.data_len() != COUNTER_SIZE {
+        return Err(TransferHookError::InvalidCounterAccount.into());
     }
-    .invoke_signed(&[Signer::from(&counter_seeds)])?;
 
     log!("Extra account meta list created");
     Ok(())
