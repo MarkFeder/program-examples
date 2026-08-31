@@ -385,7 +385,7 @@ describe('Token-2022 Transfer Hook — Counter (Pinocchio)', () => {
         const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
         assert.include(logs, 'Instruction: Execute', 'the hook was reached');
         assert.include(logs, 'custom program error: 0x0', 'rejected with IsNotCurrentlyTransferring');
-        assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
+        assert.notInclude(logs, 'has been transferred', 'the hook body did not run');
     });
 
     it('Rejects a forged source account claiming to be transferring', async () => {
@@ -434,7 +434,7 @@ describe('Token-2022 Transfer Hook — Counter (Pinocchio)', () => {
         // transferring flag must never reach the hook body.
         const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
         assert.include(logs, 'custom program error: 0x3', 'rejected with InvalidSourceAccount');
-        assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
+        assert.notInclude(logs, 'has been transferred', 'the hook body did not run');
     });
 
     it('Rejects a mint configured with a different hook program', async () => {
@@ -507,6 +507,6 @@ describe('Token-2022 Transfer Hook — Counter (Pinocchio)', () => {
         // Rejected as an unexpected hook config (custom error 2).
         const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
         assert.include(logs, 'custom program error: 0x2', 'rejected with UnexpectedTransferHookConfig');
-        assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
+        assert.notInclude(logs, 'has been transferred', 'the hook body did not run');
     });
 });
