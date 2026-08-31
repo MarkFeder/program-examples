@@ -20,6 +20,7 @@ import {
     TOKEN_PROGRAM_ADDRESS,
     findAssociatedTokenPda,
     getCreateAssociatedTokenInstruction,
+    getInitializeAccount3Instruction,
     getInitializeMint2Instruction,
     getMintToInstruction,
     getTokenDecoder,
@@ -417,6 +418,147 @@ describe('Token Swap (Pinocchio)', () => {
         // The locked minimum keeps the pool from being emptied entirely.
         assert.isAbove(Number(tokenAmount(poolAccountA)), 0, 'the pool retains the locked share');
         assert.isAbove(Number(tokenAmount(poolAccountB)), 0, 'the pool retains the locked share');
+    });
+
+    // A token account for `mint`, owned by the pool authority but NOT its
+    // associated token account. Anyone can create one of these, so nothing but
+    // an address check keeps it out of an instruction.
+    async function rogueVault(mint: Address): Promise<Address> {
+        const account = await generateKeyPairSigner();
+        const size = 165n;
+        const createIx = getCreateAccountInstruction({
+            payer,
+            newAccount: account,
+            lamports: lamports(svm.minimumBalanceForRentExemption(size)),
+            space: size,
+            programAddress: TOKEN_PROGRAM_ADDRESS,
+        });
+        const initIx = getInitializeAccount3Instruction(
+            { account: account.address, mint, owner: poolAuthority },
+            { programAddress: TOKEN_PROGRAM_ADDRESS },
+        );
+        send(await tx([createIx, initIx]), 'create rogue vault');
+        return account.address;
+    }
+
+    it('Rejects a swap routed through a substituted vault', async () => {
+        // An empty stand-in for the paying side would price the trade against a
+        // zero reserve and drain the genuine opposite vault. The vault is owned
+        // by the pool authority and holds the right mint, so only rederiving
+        // its address catches it.
+        const rogue = await rogueVault(mintA.address);
+        const base = swapIx(true, 1_000n, 1n);
+        const ix = {
+            ...base,
+            accounts: base.accounts.map((account, index) =>
+                index === 6 ? { address: rogue, role: AccountRole.WRITABLE } : account,
+            ),
+        };
+
+        const poolBBefore = tokenAmount(poolAccountB);
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the substituted vault to be rejected');
+        assert.include(
+            (result as FailedTransactionMetadata).meta().logs().join('\n'),
+            'custom program error: 0x6',
+            'rejected with InvalidSeeds',
+        );
+        assert.equal(tokenAmount(poolAccountB), poolBBefore, 'the genuine vault was untouched');
+    });
+
+    it('Rejects a deposit routed through a substituted vault', async () => {
+        // Otherwise the deposit lands in an account of the caller's choosing
+        // while the pool still mints them genuine LP shares.
+        const rogue = await rogueVault(mintA.address);
+        const base = depositIx(1_000n, 1_000n);
+        const ix = {
+            ...base,
+            accounts: base.accounts.map((account, index) =>
+                index === 6 ? { address: rogue, role: AccountRole.WRITABLE } : account,
+            ),
+        };
+
+        const sharesBefore = tokenAmount(userLiquidity);
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the substituted vault to be rejected');
+        assert.include(
+            (result as FailedTransactionMetadata).meta().logs().join('\n'),
+            'custom program error: 0x6',
+            'rejected with InvalidSeeds',
+        );
+        assert.equal(tokenAmount(userLiquidity), sharesBefore, 'no shares were minted');
+    });
+
+    it('Rejects a withdrawal against a counterfeit liquidity mint', async () => {
+        // The withdrawal entitlement is `amount / (supply + minimum)`, so a mint
+        // the caller controls lets them name their own share of the reserves.
+        const counterfeit = await generateKeyPairSigner();
+        const [counterfeitAta] = await findAssociatedTokenPda({
+            owner: payer.address,
+            mint: counterfeit.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+        send(
+            await tx([
+                getCreateAccountInstruction({
+                    payer,
+                    newAccount: counterfeit,
+                    lamports: lamports(svm.minimumBalanceForRentExemption(MINT_SIZE)),
+                    space: MINT_SIZE,
+                    programAddress: TOKEN_PROGRAM_ADDRESS,
+                }),
+                getInitializeMint2Instruction(
+                    {
+                        mint: counterfeit.address,
+                        decimals: DECIMALS,
+                        mintAuthority: payer.address,
+                        freezeAuthority: null,
+                    },
+                    { programAddress: TOKEN_PROGRAM_ADDRESS },
+                ),
+                getCreateAssociatedTokenInstruction({
+                    payer,
+                    ata: counterfeitAta,
+                    owner: payer.address,
+                    mint: counterfeit.address,
+                    tokenProgram: TOKEN_PROGRAM_ADDRESS,
+                }),
+                getMintToInstruction(
+                    { mint: counterfeit.address, token: counterfeitAta, mintAuthority: payer, amount: 1_000n },
+                    { programAddress: TOKEN_PROGRAM_ADDRESS },
+                ),
+            ]),
+            'create counterfeit liquidity mint',
+        );
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: pool, role: AccountRole.READONLY },
+                { address: poolAuthority, role: AccountRole.READONLY },
+                { address: payer.address, role: AccountRole.READONLY_SIGNER, signer: payer },
+                { address: counterfeit.address, role: AccountRole.WRITABLE },
+                { address: mintA.address, role: AccountRole.READONLY },
+                { address: mintB.address, role: AccountRole.READONLY },
+                { address: poolAccountA, role: AccountRole.WRITABLE },
+                { address: poolAccountB, role: AccountRole.WRITABLE },
+                { address: counterfeitAta, role: AccountRole.WRITABLE },
+                { address: userA, role: AccountRole.WRITABLE },
+                { address: userB, role: AccountRole.WRITABLE },
+                { address: TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: concatBytes(Uint8Array.of(WITHDRAW_LIQUIDITY), u64(1_000n)),
+        };
+
+        const poolABefore = tokenAmount(poolAccountA);
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the counterfeit mint to be rejected');
+        assert.include(
+            (result as FailedTransactionMetadata).meta().logs().join('\n'),
+            'custom program error: 0x6',
+            'rejected with InvalidSeeds',
+        );
+        assert.equal(tokenAmount(poolAccountA), poolABefore, 'the reserves were untouched');
     });
 
     it('Rejects a pool paired with the wrong mints', async () => {

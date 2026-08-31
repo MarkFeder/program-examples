@@ -54,7 +54,7 @@ pub fn swap_exact_tokens_for_tokens(program_id: &Address, accounts: &mut [Accoun
             .map_err(|_| ProgramError::InvalidInstructionData)?,
     );
 
-    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b)?;
+    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b, pool_account_a, pool_account_b)?;
 
     // The pool records which AMM it belongs to, so the fee cannot be swapped
     // for a cheaper one by passing a different AMM account.

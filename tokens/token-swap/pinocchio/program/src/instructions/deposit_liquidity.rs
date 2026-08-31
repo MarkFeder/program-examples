@@ -57,7 +57,8 @@ pub fn deposit_liquidity(program_id: &Address, accounts: &mut [AccountView], dat
             .map_err(|_| ProgramError::InvalidInstructionData)?,
     );
 
-    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b)?;
+    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b, pool_account_a, pool_account_b)?;
+    seeds.check_liquidity_mint(program_id, mint_liquidity)?;
 
     // Never take more than the depositor holds.
     let mut amount_a = requested_a.min(token_amount(&depositor_account_a.try_borrow()?)?);

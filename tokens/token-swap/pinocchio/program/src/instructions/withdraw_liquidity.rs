@@ -46,7 +46,8 @@ pub fn withdraw_liquidity(program_id: &Address, accounts: &mut [AccountView], da
             .map_err(|_| ProgramError::InvalidInstructionData)?,
     );
 
-    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b)?;
+    let seeds = PoolSeeds::load(program_id, pool, pool_authority, mint_a, mint_b, pool_account_a, pool_account_b)?;
+    seeds.check_liquidity_mint(program_id, mint_liquidity)?;
 
     let supply = mint_supply(&mint_liquidity.try_borrow()?)?;
     let denominator = supply.checked_add(MINIMUM_LIQUIDITY).ok_or(SwapError::MathOverflow)?;
