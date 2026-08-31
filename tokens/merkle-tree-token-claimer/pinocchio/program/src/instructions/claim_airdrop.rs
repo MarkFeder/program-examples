@@ -1,18 +1,17 @@
 use pinocchio::{
     cpi::{Seed, Signer},
     error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
     AccountView, Address, ProgramResult,
 };
 use pinocchio_associated_token_account::instructions::CreateIdempotent;
 use pinocchio_log::log;
-use pinocchio_system::instructions::CreateAccount;
 use pinocchio_token::instructions::TransferChecked;
 
 use crate::{
     error::ClaimError,
     merkle::compute_merkle_root,
     state::{AirdropState, ClaimReceipt, AIRDROP_STATE_SEED, CLAIM_RECEIPT_SEED, CLAIM_RECEIPT_SIZE, MINT_DECIMALS},
+    util::create_pda_account,
 };
 
 /// Pays out one leaf of the airdrop.
@@ -124,14 +123,7 @@ pub fn claim_airdrop(program_id: &Address, accounts: &mut [AccountView], data: &
             Seed::from(&receipt_bump_bytes),
         ];
 
-        CreateAccount {
-            from: signer,
-            to: claim_receipt,
-            lamports: Rent::get()?.try_minimum_balance(CLAIM_RECEIPT_SIZE)?,
-            space: CLAIM_RECEIPT_SIZE as u64,
-            owner: program_id,
-        }
-        .invoke_signed(&[Signer::from(&receipt_seeds)])?;
+        create_pda_account(signer, claim_receipt, CLAIM_RECEIPT_SIZE, program_id, &receipt_seeds)?;
     }
 
     CreateIdempotent {

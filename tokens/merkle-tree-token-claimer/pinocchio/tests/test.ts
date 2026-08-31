@@ -325,8 +325,40 @@ describe('Merkle Tree Token Claimer (Pinocchio)', () => {
         assert.deepEqual(Array.from(airdropStateData().merkleRoot), Array.from(tree.root), 'the root is unchanged');
     });
 
+    it('Pays a claim whose receipt address was pre-funded', async () => {
+        // Receipt addresses are publicly derivable, so anyone can drop lamports
+        // on one before the rightful claimant gets there. `CreateAccount`
+        // refuses to create over an existing balance, so a bare create here
+        // would let an attacker permanently block any index for a few lamports.
+        const index = 1;
+        const claimer = claimers[index];
+        const receipt = await receiptAddress(BigInt(index));
+        svm.setAccount({
+            address: receipt,
+            data: new Uint8Array(0),
+            executable: false,
+            lamports: lamports(1n),
+            programAddress: SYSTEM_PROGRAM_ADDRESS,
+            space: 0n,
+        });
+
+        const ix = await claimIx(claimer, index, CLAIM_AMOUNTS[index], tree.proof(index));
+        send(await tx([ix], claimer), 'claim over a pre-funded receipt');
+
+        const [claimerAta] = await findAssociatedTokenPda({
+            owner: claimer.address,
+            mint: mint.address,
+            tokenProgram: TOKEN_PROGRAM_ADDRESS,
+        });
+        assert.equal(tokenAmount(claimerAta), CLAIM_AMOUNTS[index], 'the claim was still paid');
+
+        const receiptAccount = svm.getAccount(receipt);
+        if (!receiptAccount?.exists) throw new Error('receipt not found');
+        assert.equal(receiptAccount.programAddress, programId, 'the receipt ended up owned by the program');
+    });
+
     it('Pays the remaining claims', async () => {
-        for (const index of [1, 2]) {
+        for (const index of [2]) {
             const claimer = claimers[index];
             const ix = await claimIx(claimer, index, CLAIM_AMOUNTS[index], tree.proof(index));
             send(await tx([ix], claimer), `claim ${index}`);

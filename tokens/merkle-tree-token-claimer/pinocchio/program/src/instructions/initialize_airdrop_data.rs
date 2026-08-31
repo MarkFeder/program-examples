@@ -1,5 +1,5 @@
 use pinocchio::{
-    cpi::{Seed, Signer},
+    cpi::Seed,
     error::ProgramError,
     sysvars::{rent::Rent, Sysvar},
     AccountView, Address, ProgramResult,
@@ -12,6 +12,7 @@ use pinocchio_token::instructions::{AuthorityType, InitializeMint2, MintTo, SetA
 use crate::{
     error::ClaimError,
     state::{AirdropState, AIRDROP_STATE_SEED, AIRDROP_STATE_SIZE, MINT_DECIMALS},
+    util::create_pda_account,
 };
 
 /// Size of a legacy SPL Token mint.
@@ -83,14 +84,7 @@ pub fn initialize_airdrop_data(program_id: &Address, accounts: &mut [AccountView
     let state_bump_bytes = [state_bump];
     let state_seeds =
         [Seed::from(AIRDROP_STATE_SEED), Seed::from(mint.address().as_ref()), Seed::from(&state_bump_bytes)];
-    CreateAccount {
-        from: authority,
-        to: airdrop_state,
-        lamports: rent.try_minimum_balance(AIRDROP_STATE_SIZE)?,
-        space: AIRDROP_STATE_SIZE as u64,
-        owner: program_id,
-    }
-    .invoke_signed(&[Signer::from(&state_seeds)])?;
+    create_pda_account(authority, airdrop_state, AIRDROP_STATE_SIZE, program_id, &state_seeds)?;
 
     AirdropState::from_bytes(&mut airdrop_state.try_borrow_mut()?)?.initialize(
         &merkle_root,
