@@ -9,7 +9,7 @@ use pinocchio_log::log;
 use crate::{
     error::GameError,
     instructions::top_up_rent,
-    instructions::{expect_pda, read_prefixed, TOKEN_2022_PROGRAM_ID},
+    instructions::{expect_pda, expect_token_holding, expect_token_program, read_prefixed, TOKEN_2022_PROGRAM_ID},
     metadata::{metadata_update_field, u64_to_decimal},
     state::{on_tree_chopped, Player, GAME_DATA_SIZE, NFT_AUTHORITY_SEED, PLAYER_SEED},
 };
@@ -35,19 +35,22 @@ const WOOD_KEY: &[u8] = b"wood";
 ///   1. `[writable]`         game data (PDA `[level_seed]`)
 ///   2. `[signer, writable]` signer (must be the player's authority)
 ///   3. `[writable]`         the player's NFT mint
-///   4. `[]`                 nft authority (PDA `[b"nft_authority"]`)
-///   5. `[]`                 Token-2022 program
-///   6. `[]`                 system program
+///   4. `[]`                 the signer's token account for that mint
+///   5. `[]`                 nft authority (PDA `[b"nft_authority"]`)
+///   6. `[]`                 Token-2022 program
+///   7. `[]`                 system program
 ///
 /// Instruction data: `[counter: u16 (LE), level_seed_len: u8, level_seed]`
 pub fn chop_tree(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -> ProgramResult {
-    let [player, game_data, signer, mint, nft_authority, token_program, _system_program] = accounts else {
+    let [player, game_data, signer, mint, token_account, nft_authority, token_program, _system_program] = accounts
+    else {
         return Err(ProgramError::NotEnoughAccountKeys);
     };
 
     if !signer.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
+    expect_token_program(token_program)?;
 
     let counter = u16::from_le_bytes(
         data.get(..2)
@@ -99,8 +102,13 @@ pub fn chop_tree(program_id: &Address, accounts: &mut [AccountView], data: &[u8]
         return Err(GameError::InvalidAccountData.into());
     }
 
+    // Every NFT this program mints answers to the same metadata authority, so
+    // holding the token is what separates the player's own NFT from anyone
+    // else's.
+    expect_token_holding(token_account, mint, signer.address())?;
+
     metadata_update_field(
-        token_program.address(),
+        &TOKEN_2022_PROGRAM_ID,
         mint,
         nft_authority,
         WOOD_KEY,

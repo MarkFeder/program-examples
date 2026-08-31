@@ -145,16 +145,38 @@ describe('Token-2022 NFT Metadata Pointer (Pinocchio)', () => {
         return { state, extensions, metadata };
     }
 
-    function chopIx(counter: number, signer: KeyPairSigner = player, playerPda: Address = playerAccount) {
+    function mintIx(owner: KeyPairSigner, mintSigner: KeyPairSigner, ata: Address) {
+        return {
+            programAddress: programId,
+            accounts: [
+                { address: owner.address, role: AccountRole.WRITABLE_SIGNER, signer: owner },
+                { address: mintSigner.address, role: AccountRole.WRITABLE_SIGNER, signer: mintSigner },
+                { address: ata, role: AccountRole.WRITABLE },
+                { address: nftAuthority, role: AccountRole.READONLY },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.of(MINT_NFT),
+        };
+    }
+
+    function chopIx(
+        counter: number,
+        signer: KeyPairSigner = player,
+        playerPda: Address = playerAccount,
+        overrides: { mint?: Address; tokenAccount?: Address; tokenProgram?: Address } = {},
+    ) {
         return {
             programAddress: programId,
             accounts: [
                 { address: playerPda, role: AccountRole.WRITABLE },
                 { address: gameData, role: AccountRole.WRITABLE },
                 { address: signer.address, role: AccountRole.WRITABLE_SIGNER, signer },
-                { address: mint.address, role: AccountRole.WRITABLE },
+                { address: overrides.mint ?? mint.address, role: AccountRole.WRITABLE },
+                { address: overrides.tokenAccount ?? tokenAccount, role: AccountRole.READONLY },
                 { address: nftAuthority, role: AccountRole.READONLY },
-                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: overrides.tokenProgram ?? TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
                 { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
             ],
             data: concatBytes(Uint8Array.of(CHOP_TREE), u16le(counter), prefixed(LEVEL_SEED)),
@@ -189,20 +211,7 @@ describe('Token-2022 NFT Metadata Pointer (Pinocchio)', () => {
     });
 
     it('Mints the NFT with its metadata in the mint', async () => {
-        const ix = {
-            programAddress: programId,
-            accounts: [
-                { address: player.address, role: AccountRole.WRITABLE_SIGNER, signer: player },
-                { address: mint.address, role: AccountRole.WRITABLE_SIGNER, signer: mint },
-                { address: tokenAccount, role: AccountRole.WRITABLE },
-                { address: nftAuthority, role: AccountRole.READONLY },
-                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
-                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
-                { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
-            ],
-            data: Uint8Array.of(MINT_NFT),
-        };
-        send(await tx([ix]), 'mint nft');
+        send(await tx([mintIx(player, mint, tokenAccount)]), 'mint nft');
 
         const { state, extensions, metadata } = nftMetadata();
         assert.equal(state.decimals, 0, 'an NFT is indivisible');
@@ -332,8 +341,21 @@ describe('Token-2022 NFT Metadata Pointer (Pinocchio)', () => {
         // trying to recreate it.
         send(await tx([initIx], second), 'init second player');
 
+        // Each player chops against their own NFT, so the second one needs a
+        // mint of their own before they can play.
+        const secondMint = await generateKeyPairSigner();
+        const [secondAta] = await findAssociatedTokenPda({
+            owner: second.address,
+            mint: secondMint.address,
+            tokenProgram: TOKEN_2022_PROGRAM_ADDRESS,
+        });
+        send(await tx([mintIx(second, secondMint, secondAta)], second), 'second player mints');
+
         const before = totalWood();
-        send(await tx([chopIx(1, second, secondPlayer)], second), 'second player chops');
+        send(
+            await tx([chopIx(1, second, secondPlayer, { mint: secondMint.address, tokenAccount: secondAta })], second),
+            'second player chops',
+        );
 
         assert.equal(totalWood(), before + 1n, 'the shared level advanced');
         const acc = svm.getAccount(secondPlayer);
@@ -342,6 +364,63 @@ describe('Token-2022 NFT Metadata Pointer (Pinocchio)', () => {
             new DataView(acc.data.buffer, acc.data.byteOffset).getBigUint64(41, true),
             1n,
             'the second player has their own wood total',
+        );
+    });
+
+    it("Refuses to rewrite another player's NFT", async () => {
+        const impostor = await generateKeyPairSigner();
+        svm.airdrop(impostor.address, lamports(10_000_000_000n));
+        const [impostorPlayer] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['player', addressEncoder.encode(impostor.address)],
+        });
+        const impostorMint = await generateKeyPairSigner();
+        const [impostorAta] = await findAssociatedTokenPda({
+            owner: impostor.address,
+            mint: impostorMint.address,
+            tokenProgram: TOKEN_2022_PROGRAM_ADDRESS,
+        });
+
+        const initIx = {
+            programAddress: programId,
+            accounts: [
+                { address: impostorPlayer, role: AccountRole.WRITABLE },
+                { address: gameData, role: AccountRole.WRITABLE },
+                { address: impostor.address, role: AccountRole.WRITABLE_SIGNER, signer: impostor },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: concatBytes(Uint8Array.of(INIT_PLAYER), prefixed(LEVEL_SEED)),
+        };
+        send(await tx([initIx], impostor), 'init impostor');
+        send(await tx([mintIx(impostor, impostorMint, impostorAta)], impostor), 'impostor mints');
+
+        // Every NFT this program mints answers to the same metadata authority,
+        // so without the holding check a valid player could point chop_tree at
+        // someone else's mint and overwrite its wood.
+        const woodBefore = nftMetadata().metadata.additionalMetadata;
+        const result = svm.sendTransaction(
+            await tx([chopIx(9, impostor, impostorPlayer, { tokenAccount: impostorAta })], impostor),
+        );
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the foreign mint to be refused');
+        assert.include(
+            (result as FailedTransactionMetadata).meta().logs().join('\n'),
+            'custom program error: 0x1',
+            'rejected with WrongAuthority',
+        );
+        assert.deepEqual(nftMetadata().metadata.additionalMetadata, woodBefore, 'the victim NFT is untouched');
+    });
+
+    it('Refuses a token program that is not Token-2022', async () => {
+        const result = svm.sendTransaction(
+            await tx([chopIx(10, player, playerAccount, { tokenProgram: SYSTEM_PROGRAM_ADDRESS })]),
+        );
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the wrong token program to be refused');
+        // Refused up front by the program, not incidentally by the CPI target:
+        // the reference gets this from `Program<'info, Token2022>`.
+        assert.include(
+            (result as FailedTransactionMetadata).meta().logs().join('\n'),
+            'incorrect program id',
+            'rejected before the CPI is attempted',
         );
     });
 });

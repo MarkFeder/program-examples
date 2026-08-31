@@ -54,3 +54,41 @@ pub fn read_prefixed(data: &[u8], offset: usize) -> Result<&[u8], pinocchio::err
     let start = offset + 1;
     data.get(start..start + len).ok_or(pinocchio::error::ProgramError::InvalidInstructionData)
 }
+
+/// Confirms `account` is the Token-2022 program.
+///
+/// The reference declares this slot as `Program<'info, Token2022>`, which
+/// Anchor checks for it.
+pub fn expect_token_program(account: &AccountView) -> ProgramResult {
+    if account.address() != &TOKEN_2022_PROGRAM_ID {
+        return Err(pinocchio::error::ProgramError::IncorrectProgramId);
+    }
+    Ok(())
+}
+
+/// Confirms `token_account` proves `owner` holds a token of `mint`.
+///
+/// Every NFT this program mints shares one metadata authority, so without this
+/// any player could pass someone else's mint and rewrite its metadata. The
+/// reference's `mint` account carries a `CHECK` comment describing exactly this
+/// constraint; it just never enforces it.
+pub fn expect_token_holding(token_account: &AccountView, mint: &AccountView, owner: &Address) -> ProgramResult {
+    if !token_account.owned_by(&TOKEN_2022_PROGRAM_ID) {
+        return Err(GameError::InvalidAccountData.into());
+    }
+
+    // Base token account layout, identical in Token-2022: mint, owner, amount.
+    let data = token_account.try_borrow()?;
+    let bytes: &[u8] = &data;
+    let account_mint = bytes.get(0..32).ok_or(GameError::InvalidAccountData)?;
+    let account_owner = bytes.get(32..64).ok_or(GameError::InvalidAccountData)?;
+    let amount = bytes.get(64..72).ok_or(GameError::InvalidAccountData)?;
+
+    if account_mint != mint.address().as_ref() || account_owner != owner.as_ref() {
+        return Err(GameError::WrongAuthority.into());
+    }
+    if u64::from_le_bytes(amount.try_into().map_err(|_| GameError::InvalidAccountData)?) == 0 {
+        return Err(GameError::WrongAuthority.into());
+    }
+    Ok(())
+}

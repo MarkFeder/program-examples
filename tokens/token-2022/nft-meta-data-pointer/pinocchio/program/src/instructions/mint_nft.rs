@@ -12,7 +12,7 @@ use pinocchio_log::log;
 use pinocchio_system::instructions::CreateAccount;
 
 use crate::{
-    instructions::{expect_pda, top_up_rent, TOKEN_2022_PROGRAM_ID},
+    instructions::{expect_pda, expect_token_program, top_up_rent, TOKEN_2022_PROGRAM_ID},
     metadata::{metadata_initialize, metadata_update_field},
     state::NFT_AUTHORITY_SEED,
 };
@@ -79,6 +79,7 @@ pub fn mint_nft(program_id: &Address, accounts: &mut [AccountView]) -> ProgramRe
     if !signer.is_signer() || !mint.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
     }
+    expect_token_program(token_program)?;
 
     let bump = expect_pda(program_id, nft_authority, &[NFT_AUTHORITY_SEED])?;
     let bump_bytes = [bump];
@@ -113,8 +114,8 @@ pub fn mint_nft(program_id: &Address, accounts: &mut [AccountView]) -> ProgramRe
     invoke_on_mint(mint, &mint_data)?;
 
     log!("Writing metadata");
-    metadata_initialize(token_program.address(), mint, nft_authority, NFT_NAME, NFT_SYMBOL, NFT_URI, &signers)?;
-    metadata_update_field(token_program.address(), mint, nft_authority, LEVEL_KEY, b"1", &signers)?;
+    metadata_initialize(&TOKEN_2022_PROGRAM_ID, mint, nft_authority, NFT_NAME, NFT_SYMBOL, NFT_URI, &signers)?;
+    metadata_update_field(&TOKEN_2022_PROGRAM_ID, mint, nft_authority, LEVEL_KEY, b"1", &signers)?;
     top_up_rent(signer, mint)?;
 
     log!("Creating token account");
