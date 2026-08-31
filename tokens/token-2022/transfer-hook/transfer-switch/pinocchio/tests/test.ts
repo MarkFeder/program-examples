@@ -20,6 +20,7 @@ import {
     ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
     TOKEN_2022_PROGRAM_ADDRESS,
     findAssociatedTokenPda,
+    getApproveInstruction,
     getCreateAssociatedTokenInstruction,
     getMintDecoder,
     getMintToInstruction,
@@ -36,15 +37,16 @@ const MINT_SIZE_WITH_TRANSFER_HOOK = 234;
 // The serialized ExtraAccountMetaList the program writes: the 8-byte Execute
 // discriminator, a u32 value length of 39 (4 + one 35-byte meta), a u32 account
 // count of 1, then the meta — a PDA of this program (tag 1) whose seed config
-// is AccountKey(3) (tag 3, index 3), the transfer authority. Read-only.
+// is AccountData (tag 4) reading 32 bytes at offset 32 of account 0, i.e. the
+// source token account's owner. Read-only.
 // prettier-ignore
 const EXPECTED_EXTRA_ACCOUNT_METAS = Uint8Array.from([
     105, 37, 101, 197, 75, 251, 102, 26, // Execute discriminator
     39, 0, 0, 0,                         // value length (u32) = 4 + 1 * 35
     1, 0, 0, 0,                          // account count (u32) = 1
     1,                                   // address is a PDA of this program
-    3, 3,                                // seed config: AccountKey(index 3)
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // padding to 32
+    4, 0, 32, 32,                        // seed config: AccountData(account 0, offset 32, len 32)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // padding to 32
     0,                                   // is_signer   = false
     0,                                   // is_writable = false
 ]);
@@ -136,8 +138,8 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
             programAddress: programId,
             seeds: ['admin-config'],
         });
-        // The switch is keyed by the wallet alone — here the payer, who is the
-        // transfer authority Token-2022 passes at index 3.
+        // The switch is keyed by the wallet alone — here the payer, who owns
+        // the source token account Token-2022 reads the owner out of.
         [payerSwitch] = await getProgramDerivedAddress({
             programAddress: programId,
             seeds: [addressEncoder.encode(payer.address)],
@@ -304,7 +306,7 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
         assert.deepEqual(
             Array.from(account.data),
             Array.from(EXPECTED_EXTRA_ACCOUNT_METAS),
-            "the list resolves the sender's switch from account 3",
+            "the list resolves the switch from the source account's owner",
         );
     });
 
@@ -434,6 +436,65 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
 
         // Hand it back so later tests keep a known admin.
         send(await tx([configureAdminIx(newAdmin, admin.address)], newAdmin), 'hand admin back');
+    });
+
+    it('Blocks a delegate from moving tokens out of a switched-off wallet', async () => {
+        // The transfer authority at index 3 may be a delegate rather than the
+        // token owner. If the switch were keyed on that authority, an enabled
+        // delegate could drain a wallet the admin had switched off — so the
+        // switch is keyed on the source account's owner instead.
+        const delegate = await generateKeyPairSigner();
+        svm.airdrop(delegate.address, lamports(1_000_000_000n));
+        const [delegateSwitch] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: [addressEncoder.encode(delegate.address)],
+        });
+
+        // The delegate is allowed to transfer, and its own switch is on.
+        send(
+            await tx([
+                getApproveInstruction(
+                    { source: sourceTokenAccount, delegate: delegate.address, owner: payer, amount: MINTED_AMOUNT },
+                    { programAddress: TOKEN_2022_PROGRAM_ADDRESS },
+                ),
+            ]),
+            'approve the delegate',
+        );
+        send(await tx([switchIx(admin, delegate.address, delegateSwitch, true)], admin), 'switch the delegate on');
+
+        // The owner is switched off.
+        send(await tx([switchIx(admin, payer.address, payerSwitch, false)], admin), 'switch the owner off');
+        assert.isFalse(switchIsOn(), "the owner's switch is off");
+
+        const base = getTransferCheckedInstruction(
+            {
+                source: sourceTokenAccount,
+                mint: mint.address,
+                destination: destinationTokenAccount,
+                authority: delegate,
+                amount: TRANSFER_AMOUNT,
+                decimals: DECIMALS,
+            },
+            { programAddress: TOKEN_2022_PROGRAM_ADDRESS },
+        );
+        // Token-2022 resolves the owner's switch, not the delegate's.
+        const delegatedTransferIx = {
+            ...base,
+            accounts: [
+                ...base.accounts,
+                { address: payerSwitch, role: AccountRole.READONLY },
+                { address: programId, role: AccountRole.READONLY },
+                { address: extraAccountMetaList, role: AccountRole.READONLY },
+            ],
+        };
+
+        const before = tokenAmount(destinationTokenAccount);
+        const result = svm.sendTransaction(await tx([delegatedTransferIx]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected the delegated transfer to be blocked');
+
+        const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
+        assert.include(logs, 'custom program error: 0x4', 'rejected with SwitchNotOn');
+        assert.equal(tokenAmount(destinationTokenAccount), before, 'nothing moved');
     });
 
     it('Rejects calling the hook outside a transfer', async () => {

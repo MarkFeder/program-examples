@@ -22,16 +22,24 @@ use crate::instructions::EXTRA_ACCOUNT_METAS_SEED;
 ///   [1, 0, 0, 0]                           account count (u32) = 1
 ///   ---- one 35-byte ExtraAccountMeta ----
 ///   [1]                                    address is a PDA of this program
-///   [3, 3, 0 * 30]                         seed config, padded to 32 bytes
+///   [4, 0, 32, 32, 0 * 28]                 seed config, padded to 32 bytes
 ///   [0]                                    is_signer   = false
 ///   [0]                                    is_writable = false
 /// ```
 ///
 /// The seed config is `spl-tlv-account-resolution`'s packed form of
-/// `Seed::AccountKey { index: 3 }`: a `3` tag, then the index. Account 3 of the
-/// `Execute` call is the transfer authority, so Token-2022 derives
-/// `[wallet]` against this program and passes the switch in — which is why no
-/// caller ever has to name it.
+/// `Seed::AccountData { account_index: 0, data_index: 32, length: 32 }`: a `4`
+/// tag followed by those three bytes. It takes 32 bytes at offset 32 of account
+/// 0 — the source token account's owner — so Token-2022 derives `[owner]`
+/// against this program and passes the switch in, and no caller ever has to
+/// name it.
+///
+/// The owner is deliberately *not* taken from account 3, the transfer
+/// authority, even though that is simpler and is what the Anchor version does.
+/// The authority may be a delegate (or Token-2022's permanent delegate), and
+/// keying the switch on it would let an enabled delegate move tokens out of a
+/// wallet the admin had switched off. The policy belongs to whoever owns the
+/// tokens.
 ///
 /// The list is fixed for this example, so it is a constant rather than a
 /// dependency on the TLV encoder.
@@ -41,8 +49,8 @@ const EXTRA_ACCOUNT_METAS_DATA: [u8; 51] = [
     39, 0, 0, 0,
     1, 0, 0, 0,
     1,
-    3, 3,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    4, 0, 32, 32,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0,
     0,
 ];
