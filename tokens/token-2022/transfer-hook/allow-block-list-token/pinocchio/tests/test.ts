@@ -31,6 +31,7 @@ import { FailedTransactionMetadata, LiteSVM } from 'litesvm';
 
 const INIT_CONFIG = 0;
 const INIT_MINT = 1;
+const ATTACH_TO_MINT = 2;
 const INIT_WALLET = 3;
 const REMOVE_WALLET = 4;
 const CHANGE_MODE = 5;
@@ -537,6 +538,42 @@ describe('Token-2022 Transfer Hook — Allow/Block List Token (Pinocchio)', () =
 
         const result = svm.sendTransaction(await tx([ix]));
         expectFailure(result, '0x5', 'rejected with MintNotUsingThisHook');
+    });
+
+    it('Refuses to attach to a mint carrying no policy', async () => {
+        // Attaching would switch the hook on over metadata `Execute` cannot
+        // read, and `ChangeMode` can only update metadata that already exists —
+        // so a mint with no `TokenMetadata` would be stuck with every transfer
+        // failing and no way back. Refusing here makes that unreachable.
+        const bareMint = await generateKeyPairSigner();
+        const [bareList] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['extra-account-metas', addressEncoder.encode(bareMint.address)],
+        });
+        svm.setAccount({
+            address: bareMint.address,
+            data: new Uint8Array(82),
+            executable: false,
+            lamports: lamports(svm.minimumBalanceForRentExemption(82n)),
+            programAddress: TOKEN_2022_PROGRAM_ADDRESS,
+            space: 82n,
+        });
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: bareMint.address, role: AccountRole.WRITABLE },
+                { address: bareList, role: AccountRole.WRITABLE },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.of(ATTACH_TO_MINT),
+        };
+
+        const result = svm.sendTransaction(await tx([ix]));
+        expectFailure(result, '0x3', 'rejected with InvalidMetadata');
+        assert.isNotTrue(svm.getAccount(bareList)?.exists, 'no meta list was created');
     });
 
     it('Rejects calling the hook outside a transfer', async () => {

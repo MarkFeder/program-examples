@@ -217,6 +217,13 @@ pub fn init_mint(program_id: &Address, accounts: &mut [AccountView], data: &[u8]
 /// Only the mint's transfer-hook authority can do this — Token-2022 enforces
 /// that on the update below, so no check here would add anything.
 ///
+/// The mint must already carry a readable `AB` policy. Attaching without one
+/// would activate the hook over metadata `Execute` cannot read, and since
+/// `ChangeMode` can only update metadata that already exists, a mint with no
+/// `TokenMetadata` at all could never be recovered — every transfer of it would
+/// fail permanently. Refusing up front makes that unreachable; set the mode
+/// with `ChangeMode` first, then attach.
+///
 /// Accounts:
 ///   0. `[signer, writable]` payer (must be the mint's transfer-hook authority)
 ///   1. `[writable]`         mint
@@ -235,6 +242,13 @@ pub fn attach_to_mint(program_id: &Address, accounts: &mut [AccountView]) -> Pro
     }
     if !mint.owned_by(&TOKEN_2022_PROGRAM_ID) {
         return Err(AblError::InvalidAccountData.into());
+    }
+
+    {
+        let mint_data = mint.try_borrow()?;
+        let metadata = read_ab_metadata(&mint_data, [MODE_KEY, THRESHOLD_KEY])?;
+        let mode = metadata.mode.ok_or(AblError::InvalidMetadata)?;
+        Mode::from_metadata_value(&mode)?;
     }
 
     log!("Pointing the mint at this hook");
