@@ -61,6 +61,21 @@ function u64(n: bigint): Uint8Array {
     new DataView(b.buffer).setBigUint64(0, n, true);
     return b;
 }
+// Walks the Token-2022 TLV list (which starts at offset 166 on both mints and
+// token accounts) and returns where `type`'s value begins, so tests can patch a
+// single extension field without rebuilding the whole account.
+function tlvValueOffset(data: Uint8Array, type: number): number {
+    let cursor = 166;
+    while (cursor + 4 <= data.length) {
+        const entryType = data[cursor] | (data[cursor + 1] << 8);
+        if (entryType === 0) break;
+        const length = data[cursor + 2] | (data[cursor + 3] << 8);
+        if (entryType === type) return cursor + 4;
+        cursor += 4 + length;
+    }
+    throw new Error(`extension ${type} not found`);
+}
+
 function concatBytes(...parts: Uint8Array[]): Uint8Array {
     const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
     let offset = 0;
@@ -127,6 +142,24 @@ describe('Token-2022 Transfer Hook — Hello World (Pinocchio)', () => {
             throw new Error(`${label} failed: ${result.err()}`);
         }
         return result;
+    }
+
+    // Rewrites an existing account's data in place, keeping its owner. Used to
+    // put a genuine Token-2022 account into a state a test cannot reach on its
+    // own — a mint pointed at another hook, or an account mid-transfer.
+    function rewriteAccount(address: Address, mutate: (data: Uint8Array) => void) {
+        const account = svm.getAccount(address);
+        if (!account?.exists) throw new Error(`account ${address} not found`);
+        const data = new Uint8Array(account.data);
+        mutate(data);
+        svm.setAccount({
+            address,
+            data,
+            executable: false,
+            lamports: account.lamports,
+            programAddress: account.programAddress,
+            space: BigInt(data.length),
+        });
     }
 
     function tokenAmount(account: Address): bigint {
@@ -329,6 +362,78 @@ describe('Token-2022 Transfer Hook — Hello World (Pinocchio)', () => {
         // transferring flag must never reach the hook body.
         const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
         assert.include(logs, 'custom program error: 0x3', 'rejected with InvalidSourceAccount');
+        assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
+    });
+
+    it('Rejects a mint configured with a different hook program', async () => {
+        // A mint whose hook is some *other* program is mid-transfer too while
+        // that program runs, and that program can CPI here with the genuine
+        // source account — passing the ownership, mint and transferring checks.
+        // Only the mint's own TransferHook config distinguishes the two cases.
+        const otherMint = await generateKeyPairSigner();
+        const otherHookProgram = (await generateKeyPairSigner()).address;
+
+        const initOtherMintIx = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: otherMint.address, role: AccountRole.WRITABLE_SIGNER, signer: otherMint },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.of(INITIALIZE_DISCRIMINATOR, DECIMALS),
+        };
+        send(await tx([initOtherMintIx]), 'initialize other mint');
+
+        // Repoint the genuine mint at the other hook program: the extension
+        // value is `authority (32) || hook program (32)`.
+        rewriteAccount(otherMint.address, data => {
+            data.set(addressEncoder.encode(otherHookProgram), tlvValueOffset(data, 14) + 32);
+        });
+
+        const [otherSource] = await findAssociatedTokenPda({
+            owner: payer.address,
+            mint: otherMint.address,
+            tokenProgram: TOKEN_2022_PROGRAM_ADDRESS,
+        });
+        send(
+            await tx([
+                getCreateAssociatedTokenInstruction(
+                    { payer, ata: otherSource, owner: payer.address, mint: otherMint.address },
+                    { programAddress: ASSOCIATED_TOKEN_PROGRAM_ADDRESS },
+                ),
+            ]),
+            'create other source token account',
+        );
+
+        // Put it mid-transfer, exactly as Token-2022 would for the other hook.
+        rewriteAccount(otherSource, data => {
+            data[tlvValueOffset(data, 15)] = 1;
+        });
+
+        const [otherMetaList] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['extra-account-metas', addressEncoder.encode(otherMint.address)],
+        });
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: otherSource, role: AccountRole.READONLY },
+                { address: otherMint.address, role: AccountRole.READONLY },
+                { address: otherSource, role: AccountRole.READONLY },
+                { address: payer.address, role: AccountRole.READONLY },
+                { address: otherMetaList, role: AccountRole.READONLY },
+            ],
+            data: concatBytes(EXECUTE_DISCRIMINATOR, u64(TRANSFER_AMOUNT)),
+        };
+
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected a foreign hook mint to be rejected');
+
+        // Rejected as an unexpected hook config (custom error 2).
+        const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
+        assert.include(logs, 'custom program error: 0x2', 'rejected with UnexpectedTransferHookConfig');
         assert.notInclude(logs, 'Hello Transfer Hook!', 'the hook body did not run');
     });
 });
