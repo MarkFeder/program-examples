@@ -1,13 +1,7 @@
 use alloc::vec::Vec;
 
-use pinocchio::{
-    cpi::{Seed, Signer},
-    error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{cpi::Seed, error::ProgramError, AccountView, Address, ProgramResult};
 use pinocchio_log::log;
-use pinocchio_system::instructions::CreateAccount;
 
 use crate::{
     error::TransferHookError,
@@ -15,6 +9,7 @@ use crate::{
         ASSOCIATED_TOKEN_PROGRAM_ID, COUNTER_SEED, COUNTER_SIZE, EXTRA_ACCOUNT_METAS_SEED, NATIVE_MINT,
         SPL_TOKEN_PROGRAM_ID,
     },
+    util::create_pda_account,
 };
 
 /// `Execute`'s TLV discriminator, which keys the `ExtraAccountMetaList` entry.
@@ -142,11 +137,9 @@ pub fn initialize_extra_account_meta_list(program_id: &Address, accounts: &mut [
     let seeds = [Seed::from(EXTRA_ACCOUNT_METAS_SEED), Seed::from(mint.address().as_ref()), Seed::from(&bump_bytes)];
 
     let metas = build_extra_account_metas();
-    let lamports = Rent::get()?.try_minimum_balance(metas.len())?;
 
     log!("Creating extra account meta list");
-    CreateAccount { from: payer, to: extra_account_meta_list, lamports, space: metas.len() as u64, owner: program_id }
-        .invoke_signed(&[Signer::from(&seeds)])?;
+    create_pda_account(payer, extra_account_meta_list, metas.len(), program_id, &seeds)?;
 
     let mut account_data = extra_account_meta_list.try_borrow_mut()?;
     account_data.copy_from_slice(&metas);
@@ -167,14 +160,7 @@ pub fn initialize_extra_account_meta_list(program_id: &Address, accounts: &mut [
         let counter_seeds = [Seed::from(COUNTER_SEED), Seed::from(&counter_bump_bytes)];
 
         log!("Creating counter");
-        CreateAccount {
-            from: payer,
-            to: counter,
-            lamports: Rent::get()?.try_minimum_balance(COUNTER_SIZE)?,
-            space: COUNTER_SIZE as u64,
-            owner: program_id,
-        }
-        .invoke_signed(&[Signer::from(&counter_seeds)])?;
+        create_pda_account(payer, counter, COUNTER_SIZE, program_id, &counter_seeds)?;
     } else if !counter.owned_by(program_id) || counter.data_len() != COUNTER_SIZE {
         return Err(TransferHookError::InvalidCounterAccount.into());
     }
