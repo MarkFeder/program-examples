@@ -1,13 +1,7 @@
-use pinocchio::{
-    cpi::{Seed, Signer},
-    error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{cpi::Seed, error::ProgramError, AccountView, Address, ProgramResult};
 use pinocchio_log::log;
-use pinocchio_system::instructions::CreateAccount;
 
-use crate::instructions::EXTRA_ACCOUNT_METAS_SEED;
+use crate::{instructions::EXTRA_ACCOUNT_METAS_SEED, util::create_pda_account};
 
 /// A serialized, empty `ExtraAccountMetaList`.
 ///
@@ -61,17 +55,8 @@ pub fn initialize_extra_account_meta_list(program_id: &Address, accounts: &mut [
     let bump_bytes = [bump];
     let seeds = [Seed::from(EXTRA_ACCOUNT_METAS_SEED), Seed::from(mint.address().as_ref()), Seed::from(&bump_bytes)];
 
-    let lamports = Rent::get()?.try_minimum_balance(EXTRA_ACCOUNT_METAS_DATA.len())?;
-
     log!("Creating extra account meta list");
-    CreateAccount {
-        from: payer,
-        to: extra_account_meta_list,
-        lamports,
-        space: EXTRA_ACCOUNT_METAS_DATA.len() as u64,
-        owner: program_id,
-    }
-    .invoke_signed(&[Signer::from(&seeds)])?;
+    create_pda_account(payer, extra_account_meta_list, EXTRA_ACCOUNT_METAS_DATA.len(), program_id, &seeds)?;
 
     let mut account_data = extra_account_meta_list.try_borrow_mut()?;
     account_data.copy_from_slice(&EXTRA_ACCOUNT_METAS_DATA);
