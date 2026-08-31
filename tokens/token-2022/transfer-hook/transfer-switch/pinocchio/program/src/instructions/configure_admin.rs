@@ -1,15 +1,10 @@
-use pinocchio::{
-    cpi::{Seed, Signer},
-    error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{cpi::Seed, error::ProgramError, AccountView, Address, ProgramResult};
 use pinocchio_log::log;
-use pinocchio_system::instructions::CreateAccount;
 
 use crate::{
     error::TransferHookError,
     instructions::{ADMIN_CONFIG_SEED, ADMIN_CONFIG_SIZE},
+    util::create_pda_account,
 };
 
 /// Sets the admin allowed to flip wallets' transfer switches.
@@ -44,14 +39,7 @@ pub fn configure_admin(program_id: &Address, accounts: &mut [AccountView]) -> Pr
         let seeds = [Seed::from(ADMIN_CONFIG_SEED), Seed::from(&bump_bytes)];
 
         log!("Creating admin config");
-        CreateAccount {
-            from: admin,
-            to: admin_config,
-            lamports: Rent::get()?.try_minimum_balance(ADMIN_CONFIG_SIZE)?,
-            space: ADMIN_CONFIG_SIZE as u64,
-            owner: program_id,
-        }
-        .invoke_signed(&[Signer::from(&seeds)])?;
+        create_pda_account(admin, admin_config, ADMIN_CONFIG_SIZE, program_id, &seeds)?;
     } else {
         if !admin_config.owned_by(program_id) || admin_config.data_len() != ADMIN_CONFIG_SIZE {
             return Err(TransferHookError::InvalidAdminConfig.into());

@@ -1,15 +1,10 @@
-use pinocchio::{
-    cpi::{Seed, Signer},
-    error::ProgramError,
-    sysvars::{rent::Rent, Sysvar},
-    AccountView, Address, ProgramResult,
-};
+use pinocchio::{cpi::Seed, error::ProgramError, AccountView, Address, ProgramResult};
 use pinocchio_log::log;
-use pinocchio_system::instructions::CreateAccount;
 
 use crate::{
     error::TransferHookError,
     instructions::{ADMIN_CONFIG_SEED, ADMIN_CONFIG_SIZE, SWITCH_ON_OFFSET, SWITCH_SIZE},
+    util::create_pda_account,
 };
 
 /// Turns a wallet's transfers on or off.
@@ -60,14 +55,7 @@ pub fn switch(program_id: &Address, accounts: &mut [AccountView], data: &[u8]) -
         let seeds = [Seed::from(wallet.address().as_ref()), Seed::from(&bump_bytes)];
 
         log!("Creating wallet switch");
-        CreateAccount {
-            from: admin,
-            to: wallet_switch,
-            lamports: Rent::get()?.try_minimum_balance(SWITCH_SIZE)?,
-            space: SWITCH_SIZE as u64,
-            owner: program_id,
-        }
-        .invoke_signed(&[Signer::from(&seeds)])?;
+        create_pda_account(admin, wallet_switch, SWITCH_SIZE, program_id, &seeds)?;
     } else if !wallet_switch.owned_by(program_id) || wallet_switch.data_len() != SWITCH_SIZE {
         return Err(TransferHookError::InvalidSwitchAccount.into());
     }

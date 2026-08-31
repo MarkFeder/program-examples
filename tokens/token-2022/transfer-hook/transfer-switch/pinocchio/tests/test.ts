@@ -288,6 +288,22 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
     });
 
     it('Creates the ExtraAccountMetaList account', async () => {
+        // Every PDA this program creates has a publicly derivable address, and
+        // `CreateAccount` refuses to create over an account that already holds
+        // lamports. A stray lamport would otherwise block setup — or, on the
+        // admin config and a wallet's switch, block the program permanently.
+        // Drop one on each of the three first.
+        for (const address of [extraAccountMetaList, adminConfig, payerSwitch]) {
+            svm.setAccount({
+                address,
+                data: new Uint8Array(0),
+                executable: false,
+                lamports: lamports(1n),
+                programAddress: SYSTEM_PROGRAM_ADDRESS,
+                space: 0n,
+            });
+        }
+
         const ix = {
             programAddress: programId,
             accounts: [

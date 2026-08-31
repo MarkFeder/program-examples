@@ -9,6 +9,7 @@ pub mod error;
 pub mod instructions;
 pub mod processor;
 pub mod token2022;
+pub mod util;
 
 use pinocchio::{entrypoint, nostd_panic_handler};
 
