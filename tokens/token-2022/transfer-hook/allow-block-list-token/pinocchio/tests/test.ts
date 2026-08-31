@@ -15,7 +15,7 @@ import {
     signTransactionMessageWithSigners,
     unwrapOption,
 } from '@solana/kit';
-import { SYSTEM_PROGRAM_ADDRESS } from '@solana-program/system';
+import { SYSTEM_PROGRAM_ADDRESS, getTransferSolInstruction } from '@solana-program/system';
 import {
     ASSOCIATED_TOKEN_PROGRAM_ADDRESS,
     TOKEN_2022_PROGRAM_ADDRESS,
@@ -574,6 +574,94 @@ describe('Token-2022 Transfer Hook — Allow/Block List Token (Pinocchio)', () =
         const result = svm.sendTransaction(await tx([ix]));
         expectFailure(result, '0x3', 'rejected with InvalidMetadata');
         assert.isNotTrue(svm.getAccount(bareList)?.exists, 'no meta list was created');
+    });
+
+    it('Refuses to attach to a mint whose threshold is malformed', async () => {
+        // A valid mode alongside an unparseable threshold bricks the mint just
+        // as surely as no metadata at all, since `Execute` parses both. The
+        // guard has to cover everything the hook will later read.
+        const second = await generateKeyPairSigner();
+        const [secondList] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['extra-account-metas', addressEncoder.encode(second.address)],
+        });
+
+        const initSecondIx = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: second.address, role: AccountRole.WRITABLE_SIGNER, signer: second },
+                { address: secondList, role: AccountRole.WRITABLE },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: concatBytes(
+                Uint8Array.of(INIT_MINT, DECIMALS, MODE_ALLOW),
+                u64(0n),
+                new Uint8Array(addressEncoder.encode(payer.address)),
+                new Uint8Array(addressEncoder.encode(payer.address)),
+                str('Second'),
+                str('SEC'),
+                str('https://example.com/second.json'),
+            ),
+        };
+        send(await tx([initSecondIx]), 'init second mint');
+
+        // Clear the list so `attach_to_mint` has something to create, then put
+        // a non-decimal threshold on the mint via a raw UpdateField.
+        svm.setAccount({
+            address: secondList,
+            data: new Uint8Array(0),
+            executable: false,
+            lamports: lamports(0n),
+            programAddress: SYSTEM_PROGRAM_ADDRESS,
+            space: 0n,
+        });
+
+        const borshString = (value: string) => {
+            const bytes = new TextEncoder().encode(value);
+            const len = new Uint8Array(4);
+            new DataView(len.buffer).setUint32(0, bytes.length, true);
+            return concatBytes(len, bytes);
+        };
+        const badThresholdIx = {
+            programAddress: TOKEN_2022_PROGRAM_ADDRESS,
+            accounts: [
+                { address: second.address, role: AccountRole.WRITABLE },
+                { address: payer.address, role: AccountRole.READONLY_SIGNER, signer: payer },
+            ],
+            data: concatBytes(
+                Uint8Array.from([221, 233, 49, 45, 181, 202, 220, 200]), // UpdateField
+                Uint8Array.of(3), // Field::Key
+                borshString('threshold'),
+                borshString('not-a-number'),
+            ),
+        };
+        // The extra key grows the mint, so top its rent up in the same
+        // transaction or the write drops it below exemption.
+        send(
+            await tx([
+                getTransferSolInstruction({ source: payer, destination: second.address, amount: lamports(5_000_000n) }),
+                badThresholdIx,
+            ]),
+            'write a malformed threshold',
+        );
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: second.address, role: AccountRole.WRITABLE },
+                { address: secondList, role: AccountRole.WRITABLE },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: Uint8Array.of(ATTACH_TO_MINT),
+        };
+
+        const result = svm.sendTransaction(await tx([ix]));
+        expectFailure(result, '0x3', 'rejected with InvalidMetadata');
+        assert.isNotTrue(svm.getAccount(secondList)?.exists, 'no meta list was created');
     });
 
     it('Rejects calling the hook outside a transfer', async () => {

@@ -244,11 +244,17 @@ pub fn attach_to_mint(program_id: &Address, accounts: &mut [AccountView]) -> Pro
         return Err(AblError::InvalidAccountData.into());
     }
 
+    // Everything `Execute` will later parse has to be readable now: a valid
+    // mode alongside a malformed threshold bricks the mint just as surely as
+    // no metadata at all.
     {
         let mint_data = mint.try_borrow()?;
         let metadata = read_ab_metadata(&mint_data, [MODE_KEY, THRESHOLD_KEY])?;
         let mode = metadata.mode.ok_or(AblError::InvalidMetadata)?;
         Mode::from_metadata_value(&mode)?;
+        if let Some(threshold) = metadata.threshold {
+            decimal_to_u64(&threshold)?;
+        }
     }
 
     log!("Pointing the mint at this hook");
