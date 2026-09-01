@@ -21,12 +21,12 @@ const FIXED_ACCOUNTS: usize = 7;
 
 /// Upper bound on the merkle proof passed through to bubblegum.
 ///
-/// ponytail: a fixed cap keeps the CPI account list on the stack instead of
-/// reaching for the allocator. 24 covers every practical tree — a proof is
-/// `max_depth - canopy_depth` nodes, and the 1232-byte transaction limit caps
-/// real proofs well below this. Raise it (or switch to the heap-allocating
-/// `invoke_with_slice`) only if a deeper canopy-less tree ever needs it.
-const MAX_PROOF_ACCOUNTS: usize = 24;
+/// A proof is `max_depth - canopy_depth` nodes and SPL Account Compression
+/// caps `max_depth` at 30, so no valid proof can exceed this — the bound exists
+/// to keep the CPI account list on the stack rather than to impose a policy of
+/// our own. A canopy-less depth-30 tree really does need all 30, and address
+/// lookup tables make such a transaction fit.
+const MAX_PROOF_ACCOUNTS: usize = 30;
 
 /// Largest account list this program hands to bubblegum.
 const MAX_CPI_ACCOUNTS: usize = FIXED_ACCOUNTS + MAX_PROOF_ACCOUNTS;
