@@ -4,7 +4,7 @@ use pinocchio_log::log;
 use crate::{
     error::TransferHookError,
     instructions::{EXTRA_ACCOUNT_METAS_SEED, SWITCH_ON_OFFSET, SWITCH_SIZE, TOKEN_2022_PROGRAM_ID},
-    token2022::{get_extension_data, TRANSFER_HOOK, TRANSFER_HOOK_ACCOUNT},
+    token2022::{get_extension_data, IMMUTABLE_OWNER, TRANSFER_HOOK, TRANSFER_HOOK_ACCOUNT},
 };
 
 /// A token account stores its mint in the first 32 bytes, then its owner.
@@ -52,11 +52,13 @@ pub fn transfer_hook(program_id: &Address, accounts: &mut [AccountView], _data: 
 
     check_hook_is_self(mint, program_id)?;
     check_is_transferring(source_token, mint)?;
+    check_owner_is_immutable(source_token)?;
 
     // The switch belongs to whoever owns the tokens, not to whoever signed the
     // transfer — the authority at index 3 may be a delegate. Read the owner out
     // of the source account, which `check_is_transferring` has just confirmed
-    // is a genuine Token-2022 account for this mint.
+    // is a genuine Token-2022 account for this mint, and `check_owner_is_immutable`
+    // that nobody can rewrite.
     let owner = {
         let source_data = source_token.try_borrow()?;
         let bytes = source_data.get(TOKEN_ACCOUNT_OWNER_RANGE).ok_or(TransferHookError::InvalidSourceAccount)?;
@@ -150,4 +152,23 @@ fn check_is_transferring(source_token: &AccountView, mint: &AccountView) -> Prog
         Some(1) => Ok(()),
         _ => Err(TransferHookError::IsNotCurrentlyTransferring.into()),
     }
+}
+
+/// Fails unless the source account's owner field can never be reassigned.
+///
+/// The switch is keyed on the owner recorded in the source token account, so a
+/// holder who can rewrite that field can point the hook at a wallet whose switch
+/// is on and move tokens out of a switched-off account — the kill switch would
+/// be advisory. `ImmutableOwner` is what makes the field worth reading.
+///
+/// The associated token program sets this extension on every account it creates
+/// for a Token-2022 mint, so ordinary holders already satisfy it. An account
+/// built with `InitializeAccount` alone does not, and is refused here rather
+/// than allowed through on an owner value it is free to change.
+fn check_owner_is_immutable(source_token: &AccountView) -> ProgramResult {
+    let account_data = source_token.try_borrow()?;
+    if get_extension_data(&account_data, IMMUTABLE_OWNER).is_none() {
+        return Err(TransferHookError::ImmutableOwnerExtensionMissing.into());
+    }
+    Ok(())
 }

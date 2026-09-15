@@ -374,6 +374,18 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
         assert.equal(tokenAmount(sourceTokenAccount), MINTED_AMOUNT, 'source funded');
     });
 
+    it('Creates the source ATA with an immutable owner', async () => {
+        // The hook reads the switch out of the owner recorded in the source
+        // account, so it refuses an account whose owner could still be changed.
+        // The associated token program sets `ImmutableOwner` on every account it
+        // creates for a Token-2022 mint, which is why ordinary holders satisfy
+        // the requirement without doing anything. Asserted rather than assumed:
+        // if this ever stops holding, every transfer of the mint starts failing.
+        const account = svm.getAccount(sourceTokenAccount);
+        if (!account?.exists) throw new Error('source token account not found');
+        assert.doesNotThrow(() => tlvValueOffset(account.data, 7), 'the ATA carries ImmutableOwner');
+    });
+
     it('Blocks a transfer for a wallet that was never switched on', async () => {
         // Default-deny: the switch account does not exist yet, which the hook
         // treats as off rather than as a missing account it can ignore.
@@ -690,5 +702,50 @@ describe('Token-2022 Transfer Hook — Transfer Switch (Pinocchio)', () => {
         const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
         assert.include(logs, 'custom program error: 0x2', 'rejected with UnexpectedTransferHookConfig');
         assert.notInclude(logs, 'Transfer allowed', 'the hook body did not run');
+    });
+
+    // Last, because it leaves the source account rewritten: every test below
+    // would otherwise be reading a token account this one has altered.
+    it('Rejects a source account whose owner can still be reassigned', async () => {
+        // The switch is keyed on the owner recorded in the source account, so an
+        // account whose owner field is still writable lets its holder point the
+        // hook at a wallet whose switch is on and move tokens out of one that is
+        // off — the switch would be advisory. `ImmutableOwner` is what makes that
+        // field worth reading. An account built with `InitializeAccount` alone
+        // does not carry it; the associated token program does, which is why
+        // every transfer above went through.
+        const account = svm.getAccount(sourceTokenAccount);
+        if (!account?.exists) throw new Error('source token account not found');
+        assert.equal(tlvValueOffset(account.data, 7), 170, 'ImmutableOwner is a header-only entry leading the list');
+
+        // Everything else is left in order, so the missing extension is the only
+        // thing that can stop this transfer: the owner's switch is on.
+        // Both instructions below are byte-identical to ones sent earlier, and
+        // LiteSVM records failed transactions too, so they need a fresh blockhash.
+        svm.expireBlockhash();
+        send(await tx([switchIx(admin, payer.address, payerSwitch, true)], admin), 'switch on');
+        assert.isTrue(switchIsOn(), 'the switch is on');
+
+        rewriteAccount(sourceTokenAccount, data => {
+            // Drop the ImmutableOwner entry and close the gap, leaving
+            // TransferHookAccount at the head of the list — the layout an
+            // `InitializeAccount` account has. Zeroing the tail keeps the list
+            // terminating cleanly rather than on the shifted bytes.
+            data.copyWithin(166, 170, 175);
+            data.fill(0, 171);
+        });
+        const rewritten = svm.getAccount(sourceTokenAccount);
+        if (!rewritten?.exists) throw new Error('source token account not found');
+        assert.throws(() => tlvValueOffset(rewritten.data, 7), /extension 7 not found/, 'ImmutableOwner is gone');
+        assert.doesNotThrow(() => tlvValueOffset(rewritten.data, 15), 'the TransferHookAccount entry survived');
+
+        const before = tokenAmount(destinationTokenAccount);
+        const result = svm.sendTransaction(await tx([transferIx()]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected a reassignable owner to be rejected');
+
+        const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
+        assert.include(logs, 'custom program error: 0x9', 'rejected with ImmutableOwnerExtensionMissing');
+        assert.notInclude(logs, 'Transfer allowed', 'the hook body did not run');
+        assert.equal(tokenAmount(destinationTokenAccount), before, 'nothing moved');
     });
 });

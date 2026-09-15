@@ -21,6 +21,9 @@ pub enum TransferHookError {
     InvalidSwitchAccount = 7,
     /// The proposed admin is already the admin.
     AdminUnchanged = 8,
+    /// The source account's owner field is reassignable, so the switch keyed on
+    /// it could be pointed at a wallet whose switch is on.
+    ImmutableOwnerExtensionMissing = 9,
 }
 
 impl From<TransferHookError> for ProgramError {

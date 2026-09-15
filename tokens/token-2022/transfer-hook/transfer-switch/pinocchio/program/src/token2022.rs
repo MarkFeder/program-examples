@@ -15,6 +15,10 @@ const TLV_START: usize = 166;
 /// Marks a TLV slot that has never been written; the list ends here.
 const UNINITIALIZED: u16 = 0;
 
+/// `ExtensionType::ImmutableOwner` — on a *token account*, fixes the owner
+/// field so it can never be reassigned.
+pub const IMMUTABLE_OWNER: u16 = 7;
+
 /// `ExtensionType::TransferHook` — on a *mint*, names the hook program.
 pub const TRANSFER_HOOK: u16 = 14;
 
