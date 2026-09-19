@@ -11,6 +11,8 @@ pub enum TransferHookError {
     UnexpectedTransferHookConfig = 2,
     /// The source account is not a Token-2022 account belonging to the given mint.
     InvalidSourceAccount = 3,
+    /// The account named as the mint is not a Token-2022 mint.
+    InvalidMint = 4,
 }
 
 impl From<TransferHookError> for ProgramError {

@@ -237,6 +237,47 @@ describe('Token-2022 Transfer Hook — Hello World (Pinocchio)', () => {
         );
     });
 
+    it('Rejects a mint that is not a Token-2022 mint', async () => {
+        // The list's address is derived from whatever mint is passed, so any
+        // account can be named as the mint unless that is checked. Squatting the
+        // list gains an attacker nothing — it holds a constant — but a wrong
+        // mint should fail here rather than leave behind a list no transfer of
+        // any real mint will ever resolve.
+        const wrongMint = await generateKeyPairSigner();
+        svm.setAccount({
+            address: wrongMint.address,
+            data: new Uint8Array(0),
+            executable: false,
+            lamports: lamports(1n),
+            programAddress: SYSTEM_PROGRAM_ADDRESS,
+            space: 0n,
+        });
+        const [listForWrongMint] = await getProgramDerivedAddress({
+            programAddress: programId,
+            seeds: ['extra-account-metas', addressEncoder.encode(wrongMint.address)],
+        });
+
+        const ix = {
+            programAddress: programId,
+            accounts: [
+                { address: payer.address, role: AccountRole.WRITABLE_SIGNER, signer: payer },
+                { address: listForWrongMint, role: AccountRole.WRITABLE },
+                { address: wrongMint.address, role: AccountRole.READONLY },
+                { address: TOKEN_2022_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: ASSOCIATED_TOKEN_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+                { address: SYSTEM_PROGRAM_ADDRESS, role: AccountRole.READONLY },
+            ],
+            data: INITIALIZE_EXTRA_ACCOUNT_META_LIST_DISCRIMINATOR,
+        };
+
+        const result = svm.sendTransaction(await tx([ix]));
+        assert.instanceOf(result, FailedTransactionMetadata, 'expected a non-Token-2022 mint to be rejected');
+
+        const logs = (result as FailedTransactionMetadata).meta().logs().join('\n');
+        assert.include(logs, 'custom program error: 0x4', 'rejected with InvalidMint');
+        assert.isFalse(svm.getAccount(listForWrongMint)?.exists ?? false, 'no list was created');
+    });
+
     it('Creates token accounts and mints tokens', async () => {
         send(
             await tx([
