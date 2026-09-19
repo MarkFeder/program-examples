@@ -15,6 +15,8 @@ pub enum TransferHookError {
     InvalidCounterAccount = 4,
     /// The transfer count would exceed `u64::MAX`.
     CounterOverflow = 5,
+    /// The account named as the mint is not a Token-2022 mint.
+    InvalidMint = 6,
 }
 
 impl From<TransferHookError> for ProgramError {

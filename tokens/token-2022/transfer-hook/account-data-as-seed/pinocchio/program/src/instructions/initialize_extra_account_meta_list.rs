@@ -3,7 +3,7 @@ use pinocchio_log::log;
 
 use crate::{
     error::TransferHookError,
-    instructions::{COUNTER_SEED, COUNTER_SIZE, EXTRA_ACCOUNT_METAS_SEED},
+    instructions::{COUNTER_SEED, COUNTER_SIZE, EXTRA_ACCOUNT_METAS_SEED, TOKEN_2022_PROGRAM_ID},
     util::create_pda_account,
 };
 
@@ -54,6 +54,13 @@ const EXTRA_ACCOUNT_METAS_DATA: [u8; 51] = [
     1,
 ];
 
+/// Where a mint's account-type byte sits: the 82-byte mint padded out to the
+/// 165-byte base area that every extension-carrying account shares.
+const MINT_TYPE_BYTE_OFFSET: usize = 165;
+
+/// `AccountType::Mint`.
+const MINT_TYPE_BYTE: u8 = 1;
+
 /// Creates the `ExtraAccountMetaList` PDA for `mint`, and the counter it
 /// resolves to.
 ///
@@ -82,6 +89,16 @@ pub fn initialize_extra_account_meta_list(program_id: &Address, accounts: &mut [
 
     if !payer.is_signer() {
         return Err(ProgramError::MissingRequiredSignature);
+    }
+
+    // Anyone can call this instruction, so confirm the mint really is a
+    // Token-2022 mint before deriving the list's address from it — the
+    // guarantee `InterfaceAccount<Mint>` gave the Anchor version.
+    if !mint.owned_by(&TOKEN_2022_PROGRAM_ID) {
+        return Err(TransferHookError::InvalidMint.into());
+    }
+    if mint.try_borrow()?.get(MINT_TYPE_BYTE_OFFSET) != Some(&MINT_TYPE_BYTE) {
+        return Err(TransferHookError::InvalidMint.into());
     }
 
     let (expected_address, bump) =
